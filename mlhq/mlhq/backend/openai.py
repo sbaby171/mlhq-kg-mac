@@ -18,7 +18,7 @@ class Client:
             raise ValueError(f"Unrecognized {self._backend} backend")
 
 
-    def chat(self , model, messages): 
+    def chat(self , model, messages, stream=False): 
         if self._backend == "ollama": 
-            return self._client.chat(model, messages)
+            return self._client.chat(model, messages, stream=stream)
 # --------------------------------------------------------------------|-------:

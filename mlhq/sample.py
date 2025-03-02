@@ -11,6 +11,9 @@ def __handle_cli_args():
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL)
     parser.add_argument("--backend", type=str, default=DEFAULT_BACKEND)
     parser.add_argument("--prompt", type=str, default=DEFAULT_PROMPT)
+    parser.add_argument('--stream', action='store_true')
+    parser.add_argument('--no-stream', dest='stream', action='store_false')
+    parser.set_defaults(stream=True)
     args = parser.parse_args()
     return args
 
@@ -19,9 +22,14 @@ def main(args):
      client = Client(backend=args.backend)
      response = client.chat(
          model = args.model, 
-         messages = [{'role':'user', 'content': f"{args.prompt}"}]
+         messages = [{'role':'user', 'content': f"{args.prompt}"}],
+         stream=args.stream, 
      )
-     print(response)
+     if args.stream: 
+         for chunk in response:
+             print(chunk['message']['content'], end='', flush=True)
+     else: 
+         print(response)
 # --------------------------------------------------------------------|-------:
 if __name__ == "__main__": 
     args = __handle_cli_args()  
