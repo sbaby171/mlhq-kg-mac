@@ -1,4 +1,5 @@
 from mlhq.backend.openai import Client 
+from mlhq.backend.openai import MODELS
 # ^^^ improve to: from mlhq import Client
 import argparse 
 import sys 
@@ -23,23 +24,11 @@ DEFAULT_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 DEFAULT_BACKEND = "hf"
 DEFAULT_PROMPT = "Hello, who are you?"
 DEFAULT_LOG_LEVEL = "info"
-HF_MODELS = [
-    "meta-llama/Llama-3.1-8B-Instruct", 
-]
-OLLAMA_MODELS = [
-    "llama3.2",
-    "llama3.2:1b",
-    "llama3.2:3b",
-    "llama3.2:latest",
-    "llama3.3", 
-    "llama3.3:latest",
-    "deepseek-r1:8b", 
-]
 # ^^^ TODO - ollama models could be extracted from ~/.ollama
 # --------------------------------------------------------------------|-------:
 def __handle_cli_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default=DEFAULT_MODEL)
+    parser.add_argument("--model", type=str, default=DEFAULT_MODEL,choices = MODELS)
     parser.add_argument("--backend", type=str, default=DEFAULT_BACKEND)
     parser.add_argument("--prompt", type=str, default=DEFAULT_PROMPT)
     parser.add_argument('--stream', action='store_true')
@@ -60,12 +49,6 @@ def __handle_cli_args():
     else: 
         raise RuntimeError(f"unsupported log-level: {args.log}")
     print(type(args.logging))
-
-    if args.model in HF_MODELS: 
-        args.backend = "huggingface" 
-    elif args.model in OLLAMA_MODELS: 
-        args.backend = "ollama"
-    # ^^^ NOTE - this check could be pushed into mlhq.backend.openai.py
     return args
 # --------------------------------------------------------------------|-------:
 def main(args): 
@@ -83,12 +66,14 @@ def main(args):
      if not args.stream: 
          print(response)
      else:
-         if args.backend == "ollama": 
+         if client.get_backend() == "ollama": 
              for chunk in response:
                  print(chunk['message']['content'], end='', flush=True)
-         elif args.backend == "huggingface": 
+         elif client.get_backend() == "huggingface": 
              for chunk in response: 
                  print(chunk.choices[0].delta.content, end='', flush=True)
+         else: 
+             raise RuntimeError("Unsupported backend: {client.get_backend()}")
 # --------------------------------------------------------------------|-------:
 if __name__ == "__main__": 
     args = __handle_cli_args()  
