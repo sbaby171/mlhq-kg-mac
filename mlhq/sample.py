@@ -11,7 +11,7 @@ BLUE = '\033[34m'
 YELLOW = '\033[33m'
 BOLD = '\033[1m'
 RESET = '\033[0m'
-FIG_FONT = "slant"
+FIG_FONT = "chunky"#"larry3d"#"slant"
 FIG = Figlet(font=FIG_FONT)
 #banner = f"{BOLD}{BLUE}MLHQ - Sample"
 banner = f"MLHQ - Sample"
