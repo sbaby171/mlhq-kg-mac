@@ -1,5 +1,12 @@
 # mlhq-kg-mac
-Project for builiing Agent Flow with Knowledge Graphs on MAC M4 Pro
+Project for builiing Agent Flow with Knowledge Graphs on MAC M4 Pro (and 
+some API stuff)
+
+
+**NOTE** Most of the inspiration for this project came from here (https://github.com/PeterGriffinJin/Graph-CoT/tree/main)
+and some of the code related to GraphAgent were taken from there - but updated 
+for my needs. 
+
 
 # Current Issues: 
 
