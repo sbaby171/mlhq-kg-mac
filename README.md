@@ -1,9 +1,6 @@
 # mlhq-kg-mac
 Project for builiing Agent Flow with Knowledge Graphs on MAC M4 Pro
 
-
-----
-
 # Current Issues: 
 
 
@@ -19,8 +16,6 @@ Project for builiing Agent Flow with Knowledge Graphs on MAC M4 Pro
 > For this specific project, I think I can forgo the requirement of OpenAI-API 
 chat completion capatibility. As long as I know the prompt, I can simply push
 that into the locally hosted LLM via HugginFace Pipelines. 
-
-----
 
 # Cost: 
 
