@@ -15,7 +15,7 @@ Project for builiing Agent Flow with Knowledge Graphs on MAC M4 Pro
 ^^^ For now, I am going with the first option
 
 
-> **_NOTE:_**  For this specific project, I think I can forgo the requirement of OpenAI-API 
+> [!NOTE]  For this specific project, I think I can forgo the requirement of OpenAI-API 
 chat completion capatibility. As long as I know the prompt, I can simply push
 that into the locally hosted LLM via HugginFace Pipelines. 
 
