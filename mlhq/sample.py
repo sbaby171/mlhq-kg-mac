@@ -74,6 +74,7 @@ def main(args):
                  print(chunk.choices[0].delta.content, end='', flush=True)
          else: 
              raise RuntimeError("Unsupported backend: {client.get_backend()}")
+     
 # --------------------------------------------------------------------|-------:
 if __name__ == "__main__": 
     args = __handle_cli_args()  

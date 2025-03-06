@@ -1,12 +1,17 @@
+"""
+This script is maninly for adding to the MongoDB. 
+"""
+
 import json
 import os
 import sys 
 from pymongo import MongoClient
 import argparse
-
-DEFAULT_GRAPH_JSON = "~/code/Graph-CoT/data/processed_data/biomedical/graph.json"
-DEFAULT_DB_URI = 'mongodb://localhost:27017/'
-DEFAULT_DB_NAME = "graph-cot"
+# --------------------------------------------------------------------|-------:
+DEFAULT_QUES_JSON  = "/Users/msbabo/code/Graph-CoT/data/processed_data/biomedical/data.json"
+DEFAULT_GRAPH_JSON = "/Users/msbabo//code/Graph-CoT/data/processed_data/biomedical/graph.json"
+DEFAULT_DB_URI     = 'mongodb://localhost:27017/'
+DEFAULT_DB_NAME    = "graph-cot"
 DEFAULT_DB_COLLECTION = "biomedical"
 # --------------------------------------------------------------------|-------:
 def __handle_cli_args():
@@ -14,12 +19,16 @@ def __handle_cli_args():
     parser.add_argument('--db-uri', type=str, default=DEFAULT_DB_URI)
     parser.add_argument('--db-name', type=str, default=DEFAULT_DB_NAME)
     parser.add_argument('--db-collection', type=str, default=DEFAULT_DB_COLLECTION)
-    parser.add_argument('--input-json', type=str, default=DEFAULT_GRAPH_JSON)
-
+    parser.add_argument('--graph-json', type=str, default=DEFAULT_GRAPH_JSON)
+    parser.add_argument('--questions-json', type=str, default=DEFAULT_QUES_JSON)
     args = parser.parse_args()
-    if args.input_json and (args.input_json.startswith("~")): 
-        args.input_json = os.path.expanduser(args.input_json)
- 
+    if args.graph_json and (args.graph_json.startswith("~")): 
+        args.graph_json = os.path.expanduser(args.graph_json)
+     
+    if not os.path.exists(args.questions_json): 
+        raise RuntimeError(f"Questions path not valid: {args.questions_json}")
+    if not os.path.exists(args.graph_json): 
+        raise RuntimeError(f"Graph path not valid: {args.questions_json}")
     return args
 # --------------------------------------------------------------------|-------:
 def print_client_db_names(db_client): 
@@ -27,8 +36,8 @@ def print_client_db_names(db_client):
         print(f"database: {db_name}")
 
 def print_collections(db): 
-    collection_list = db.list_collection_names()
-    print(f"Collections in '{args.db_name}' database: {collection_list}")
+    for clct in db.list_collection_names(): 
+        print(f"Database: '{args.db_name}' --> collection: {clct}")
 # --------------------------------------------------------------------|-------:
 def import_domain_data(db, domain_name, domain_path):
     """Import data for a specific domain"""
@@ -98,7 +107,7 @@ def main(args):
     print_collections(db)
 
     # Load the graph.json file
-    with open(args.input_json, 'r') as file:
+    with open(args.graph_json, 'r') as file:
         graph_data = json.load(file)
 
 
@@ -113,7 +122,7 @@ def main(args):
       
     
     domain_name = "biomedical"
-    import_domain_data(db, domain_name, args.input_json)
+    import_domain_data(db, domain_name, args.graph_json)
     print(total)
 
     sys.exit(1)
@@ -132,7 +141,25 @@ def main(args):
 #            **node_data  # Unpack the node data (features and neighbors)
 #        }
 #        collection.insert_one(document)
+def review_questions(args) : 
+
+    print(f"DEBUG [review_question] Path: {args.questions_json}")
+    #with open(args.questions_json, 'r') as file:
+    #    ques_data = json.load(file)
+    ques_data = [] 
+    with open(args.questions_json, 'r') as file:
+        for line in file:
+            if line.strip():  # Skip empty lines
+                ques_data.append(json.loads(line))
+
+    for i, qdata in enumerate(ques_data, start=1): 
+        #print(f"{i}.)  {qdata}")
+        print(f"{i}.)  qid={qdata['qid']}, question={qdata['question']}, ans={qdata['answer']}")
+       
+    
+
 # --------------------------------------------------------------------|-------:
 if __name__ == "__main__": 
     args = __handle_cli_args()
+    review_questions(args)
     main(args)
