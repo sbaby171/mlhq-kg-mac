@@ -50,16 +50,25 @@ class Client:
     def get_backend(self): 
         return self._backend
 
-    def chat(self , model, messages, stream=True): 
-    #def chat(self , *args, **kwargs): 
+    #def chat(self , model, messages, stream=False): 
+    def chat(self, *args, **kwargs): 
+        model = kwargs.get('model', self._model)
+        messages = kwargs.get('messages', None)
+        if messages == None: 
+            raise RuntimeError("Must Provide `messages`.")
+        stream = kwargs.get("stream", False)
+        max_tokens = kwargs.get('max_tokens', 128)
+      
+        print(f"DEBUG [chat]: max-tokens={max_tokens}")
+      
         if isinstance(self._client, ollama.Client): 
-            return self._client.chat(self._model, messages, stream=stream)
-            #return self._client.chat(messages, stream=stream)
+            return self._client.chat(model=model, messages=messages, stream=stream)
         elif isinstance(self._client, InferenceClient): 
-            #response = self._client.chat_completion(messages, max_tokens=100)
-            #response = self._client.chat_completion(messages, max_tokens=100, stream=stream)
-            response = self._client.chat_completion(model=model, messages=messages, max_tokens=100, stream=stream)
+            response = self._client.chat_completion(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens, 
+                stream=stream)
             return response
-            #return self._client.chat.completions.create(model=model, messages=messages, stream=stream)
       
 # --------------------------------------------------------------------|-------:
