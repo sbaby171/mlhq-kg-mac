@@ -1,31 +1,37 @@
 from mlhq.backend.openai import Client 
-from mlhq.backend.openai import MODELS
+from mlhq.backend.openai import (
+    MODELS, 
+    OLLAMA_BACKEND, 
+    LOCAL_BACKEND, 
+    HF_CLIENT_BACKEND
+) 
 # ^^^ improve to: from mlhq import Client
 import argparse 
 import sys 
 import logging
 from pyfiglet import Figlet
+import torch
+from transformers import pipeline, AutoTokenizer, AutoConfig 
 # --------------------------------------------------------------------|-------:
-RED = '\033[31m'
-BLUE = '\033[34m'
-YELLOW = '\033[33m'
-BOLD = '\033[1m'
-RESET = '\033[0m'
-FIG_FONT = "chunky"#"larry3d"#"slant"
-FIG = Figlet(font=FIG_FONT)
-#banner = f"{BOLD}{BLUE}MLHQ - Sample"
-banner = f"MLHQ - Sample"
-#print(f"{BOLD}{RED}Error:{RESET} Something went wrong")
-#print(f"{BOLD}{BLUE}Info:{RESET} Processing data...")
-#print(f"{YELLOW}Warning:{RESET} Disk space is low")
-print(FIG.renderText(banner))
+FIG = Figlet(font="chunky") # larry3d, slant
+print(FIG.renderText("MLHQ - Sample"))
 # --------------------------------------------------------------------|-------:
 DEFAULT_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
-DEFAULT_BACKEND = "hf"
-DEFAULT_PROMPT = "Hello, who are you?"
+DEFAULT_BACKEND = "local"
+DEFAULT_PROMPT = "Tell me a dad joke."
 DEFAULT_LOG_LEVEL = "info"
 # ^^^ TODO - ollama models could be extracted from ~/.ollama
+#pipe = pipeline(                                                                                                                                       
+#                "text-generation",                                                 
+#                model="meta-llama/Llama-3.1-8B-Instruct", 
+#                torch_dtype=torch.float16,                                         
+#                device_map="auto"                                                  
+#       ) 
+#messages = [{"role": "user", "content": "Tell me a dad joke."}]
+#print(pipe(messages, do_sample = True, max_new_tokens=256))
+#sys.exit(1)
 # --------------------------------------------------------------------|-------:
+# sample.py --model meta-llama/Llama-3.1-8B-Instruct
 def __handle_cli_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL,choices = MODELS)
@@ -57,23 +63,42 @@ def main(args):
      args.logging.info(f"Received backend: {args.backend}")
      print(f"Received model: {args.model}")
      print(f"Received backend: {args.backend}")
+
+     #client = Client() 
+     #client = Client(args.model)
+     #client = Client(model = args.model)
      client = Client(model = args.model, backend=args.backend)
      response = client.chat(
          model = args.model, 
          messages = [{'role':'user', 'content': f"{args.prompt}"}],
          stream=args.stream, 
      )
-     if not args.stream: 
+     prompt_tokens = 0
+     gen_tokens = 0 
+
+     if client.backend == LOCAL_BACKEND: # issue within stream on HF Pipeline
+         print(response)
+     elif not args.stream: 
          print(response)
      else:
-         if client.get_backend() == "ollama": 
+             
+         if client.get_backend() == OLLAMA_BACKEND: 
              for chunk in response:
                  print(chunk['message']['content'], end='', flush=True)
-         elif client.get_backend() == "huggingface": 
+             prompt_tokens = chunk["prompt_eval_count"]
+             gen_tokens = chunk["eval_count"]
+         elif client.get_backend() == HF_CLIENT_BACKEND: 
              for chunk in response: 
                  print(chunk.choices[0].delta.content, end='', flush=True)
+
+         #elif client.backend == LOCAL_BACKEND: 
+         elif client.get_backend() == LOCAL_BACKEND: 
+             print(response)
          else: 
              raise RuntimeError("Unsupported backend: {client.get_backend()}")
+         print("\n\nSummary of Execution:")
+         print("prompt-tokens   : ", chunk['prompt_eval_count'])
+         print("generated-tokens: ", chunk['eval_count'])
      
 # --------------------------------------------------------------------|-------:
 if __name__ == "__main__": 
