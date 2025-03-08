@@ -11,10 +11,12 @@ VLLM_BACKEND = "vllm"
 TRTLLM_BACKEND = "trtllm"
 OLLAMA_BACKEND = "ollama"
 HF_CLIENT_BACKEND = "hf-client"
+BACKENDS = [LOCAL_BACKEND, OLLAMA_BACKEND, HF_CLIENT_BACKEND]
 # --------------------------------------------------------------------|-------:
 
 HF_MODELS = [
     "meta-llama/Llama-3.1-8B-Instruct", 
+    "meta-llama/Llama-3.3-70B-Instruct", 
 ]
 OLLAMA_MODELS = [
     "llama3.2",
@@ -60,11 +62,15 @@ def _sync_model_and_backend(model, backend):
         tmpname = "models--" + model.replace("/",'--')
         if tmpname in os.listdir(hub_local + "/hub"): 
             return {'model':model, "backend":LOCAL_BACKEND}
+        else: # If not local --> HF_CLIENT
+            print(f"INFO [sync-model]: Model '{model}'not found locally - setting backend to HF InferenceClient.")
+            return {'model':model, "backend":HF_CLIENT_BACKEND}
     elif model in OLLAMA_MODELS: 
         print(f"DEBUG: [sync-model-backend]: Model {model}")
         return {'model':model, "backend": OLLAMA_BACKEND} 
     else: 
         raise ValueError(f"Model is not supported: {model}")
+  
          
 # TODO: I want a unit test to check the various options of the 
 # constructor but in order to do so, I need to skip model Loading. 

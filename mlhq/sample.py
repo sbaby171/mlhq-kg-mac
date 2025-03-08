@@ -3,7 +3,8 @@ from mlhq.backend.openai import (
     MODELS, 
     OLLAMA_BACKEND, 
     LOCAL_BACKEND, 
-    HF_CLIENT_BACKEND
+    HF_CLIENT_BACKEND, 
+    BACKENDS 
 ) 
 # ^^^ improve to: from mlhq import Client
 import argparse 
@@ -35,7 +36,7 @@ DEFAULT_LOG_LEVEL = "info"
 def __handle_cli_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL,choices = MODELS)
-    parser.add_argument("--backend", type=str, default=DEFAULT_BACKEND)
+    parser.add_argument("--backend", type=str, default=DEFAULT_BACKEND, choices=BACKENDS)
     parser.add_argument("--prompt", type=str, default=DEFAULT_PROMPT)
     parser.add_argument('--stream', action='store_true')
     parser.add_argument('--no-stream', dest='stream', action='store_false')
@@ -87,18 +88,16 @@ def main(args):
                  print(chunk['message']['content'], end='', flush=True)
              prompt_tokens = chunk["prompt_eval_count"]
              gen_tokens = chunk["eval_count"]
-         elif client.get_backend() == HF_CLIENT_BACKEND: 
+         elif client.backend == HF_CLIENT_BACKEND: 
              for chunk in response: 
                  print(chunk.choices[0].delta.content, end='', flush=True)
-
-         #elif client.backend == LOCAL_BACKEND: 
-         elif client.get_backend() == LOCAL_BACKEND: 
-             print(response)
+             prompt_tokens = "NA"
+             gen_tokens = "NA"
          else: 
              raise RuntimeError("Unsupported backend: {client.get_backend()}")
          print("\n\nSummary of Execution:")
-         print("prompt-tokens   : ", chunk['prompt_eval_count'])
-         print("generated-tokens: ", chunk['eval_count'])
+         print("prompt-tokens   : ", prompt_tokens)
+         print("generated-tokens: ", gen_tokens)
      
 # --------------------------------------------------------------------|-------:
 if __name__ == "__main__": 
