@@ -13,6 +13,11 @@ for my needs.
 QUES: How to route my HuggingFace InferenceClient inference to the MLHQ org
 acount rather than my own? 
 
+https://www.reddit.com/r/huggingface/comments/1idkjx5/hf_new_inference_providers_pricing_confusion/ 
+
+
+https://huggingface.co/docs/api-inference/en/pricing
+
 
 # Current Issues: 
 

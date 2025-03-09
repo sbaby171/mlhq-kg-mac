@@ -16,6 +16,7 @@ BACKENDS = [LOCAL_BACKEND, OLLAMA_BACKEND, HF_CLIENT_BACKEND]
 
 HF_MODELS = [
     "meta-llama/Llama-3.1-8B-Instruct", 
+    "meta-llama/Llama-3.2-1B-Instruct", 
     "meta-llama/Llama-3.3-70B-Instruct", 
 ]
 OLLAMA_MODELS = [
@@ -58,7 +59,7 @@ def _sync_model_and_backend(model, backend):
         try:
             hub_local = os.environ['HF_HOME']
         except KeyError:
-            print(f"Env variable 'HF_HOME' is not set.")
+            raise RuntimeError(f"Env variable 'HF_HOME' is not set.")
         tmpname = "models--" + model.replace("/",'--')
         if tmpname in os.listdir(hub_local + "/hub"): 
             return {'model':model, "backend":LOCAL_BACKEND}
