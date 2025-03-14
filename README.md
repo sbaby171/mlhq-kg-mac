@@ -35,10 +35,3 @@ https://huggingface.co/docs/api-inference/en/pricing
 chat completion capatibility. As long as I know the prompt, I can simply push
 that into the locally hosted LLM via HugginFace Pipelines. 
 
-# Cost: 
-
-So far my general costs are: 
-* M4 Max 128G &rarr; 5k
-* HF Entrprise &rarr; 216 (billed yearly at 18 a month )
-* Claude Pro &rarr; 20 bucks a month 
-* OpenAI Businsess &rarr; 600 for a year. 
