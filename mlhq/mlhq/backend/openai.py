@@ -46,6 +46,8 @@ class LazyPipeline:
         return self._pipeline
     
     def __call__(self, *args, **kwargs):
+        print(f"DEBUG: [LazyPipeline]: args = {args}")
+        print(f"DEBUG: [LazyPipeline]: kwargs = {kwargs}")
         return self.pipeline(*args, **kwargs)
 # --------------------------------------------------------------------|-------:
 def _sync_model_and_backend(model, backend): 
@@ -156,5 +158,17 @@ class Client:
                 max_tokens=max_tokens, 
                 stream=stream)
             return response
+    # 
+    #self.llm(self._build_agent_prompt()[1].content,
+    #TypeError: 'Client' object is not callable
+    #def __call__(self, messages, do_sample=True, top_k=10, num_return_sequences=1, eos_token_id=13, max_length=2048): 
+    def __call__(self, messages, **kwargs): 
+        # To make is callable implies high functionality. Very similiar to 
+        # a HF Pipeline
+        if isinstance(self._client, LazyPipeline): 
+            return self._client(messages, **kwargs)
+
+        return self.chat(messages = messages)
+ 
       
 # --------------------------------------------------------------------|-------:
