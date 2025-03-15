@@ -3,20 +3,23 @@ import ollama
 from huggingface_hub import InferenceClient
 from transformers import pipeline #, AutoTokenizer, AutoConfig, AutoModelForCausalLM  
 import os
+from mlhq.config import load_model_registry
+#from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Union, overlo
 # --------------------------------------------------------------------|-------:
 DEFAULT_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 DEFAULT_BACKEND = "local" # pipelines
-LOCAL_BACKEND = "local"
-VLLM_BACKEND = "vllm"
-TRTLLM_BACKEND = "trtllm"
+HF_LOCAL_BACKEND = "hf-local"
 OLLAMA_BACKEND = "ollama"
 HF_CLIENT_BACKEND = "hf-client"
-BACKENDS = [LOCAL_BACKEND, OLLAMA_BACKEND, HF_CLIENT_BACKEND]
+#VLLM_BACKEND = "vllm"
+#TRTLLM_BACKEND = "trtllm"
+BACKENDS = [HF_LOCAL_BACKEND, OLLAMA_BACKEND, HF_CLIENT_BACKEND]
 # --------------------------------------------------------------------|-------:
 
 HF_MODELS = [
-    "meta-llama/Llama-3.1-8B-Instruct", 
     "meta-llama/Llama-3.2-1B-Instruct", 
+    "meta-llama/Llama-3.1-8B-Instruct", 
+    "meta-llama/Meta-Llama-3-8B-Instruct", 
     "meta-llama/Llama-3.3-70B-Instruct", 
 ]
 OLLAMA_MODELS = [
@@ -46,16 +49,27 @@ class LazyPipeline:
         return self._pipeline
     
     def __call__(self, *args, **kwargs):
-        print(f"DEBUG: [LazyPipeline]: args = {args}")
-        print(f"DEBUG: [LazyPipeline]: kwargs = {kwargs}")
+    #def __call__(self, *args, generate_kwargs={}):
+        #print(f"DEBUG: [LazyPipeline]: args = {args}")
+        #print(f"DEBUG: [LazyPipeline]: kwargs = {kwargs}")
         return self.pipeline(*args, **kwargs)
+        #return self.pipeline(*args, generate_kwargs=generate_kwargs)
 # --------------------------------------------------------------------|-------:
 def _sync_model_and_backend(model, backend): 
     """ Check and aligns the model and backed. This function is used 
     within the Client creation.  
     """
+    model_registry = load_model_registry()
+    print(f"DEBUG: [sync-model-backend]: Model Registry Loaded = {model_registry}")
+
+    # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- |-- --- :
+    # If no model or backend, send the defaults. 
+    # If model and backend, simply return.
     if (not model) and (not backend):
         return {'model':DEFAULT_MODEL,'backend':DEFAULT_BACKEND}
+    if model and backend: 
+        return {'model':model,'backend':backend}
+    # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- |-- --- :
 
     if model in HF_MODELS: 
         try:
@@ -73,8 +87,74 @@ def _sync_model_and_backend(model, backend):
         return {'model':model, "backend": OLLAMA_BACKEND} 
     else: 
         raise ValueError(f"Model is not supported: {model}")
+
+
+
+# ====================================================================|========:         
+# NOTE - HuggingFace pipelines use GenerationConfig
+class ClientParams: 
+    def __init__(self, backend=None): 
+        self._backend = backend 
+        self._resolved = False 
+        self.map = {} 
+        self.stream = False 
+        self.max_new_tokens = 128
+
+    @property
+    def stream(self): 
+        return self._stream
+    
+    @stream.setter
+    def stream(self, boolean):
+        self._stream = boolean
+
+    @property
+    def max_new_tokens(self): 
+        return self._max_new_tokens
+    
+    @max_new_tokens.setter
+    def max_new_tokens(self, boolean):
+        self._max_new_tokens = boolean
+
+    def set_max_new_tokens(self, max_new_tokens): 
+        self.max_new_tokens = max_new_tokens 
+
+
+    #def __getattr__(self, name: str):
+    #    return self.__dict__[f"{name}"]
+
+    #def __setattr__(self, name, value):
+    #    self.__dict__[f"{name}"] = value
+
+
+    def is_resolved(self,): 
+        return self._resolved
   
-         
+    def resolve(self, backend): 
+        """The idea odf the resolve function is resolved the internal map 
+        and for the user to access the values via the map.  
+        """
+        if backend == HF_CLIENT_BACKEND: # Backends.HF_CLIENT:  
+            self.map["stream"] = self.stream
+            self.map["max_new_tokens"] = self.max_new_tokens
+        elif backend == HF_LOCAL_BACKEND: # Backends.HF_CLIENT:  
+            self.map["stream"] = self.stream
+            self.map["max_new_tokens"] = self.max_new_tokens
+        else: 
+            raise RuntimeError(f"Invalid backend '{backend}'")
+    # ^^^ wait this function is not making much sense. If the user is going 
+    # to use cparams.map["<name>"]. Instead, we can just pull directly, 
+    # stream = cparams.stream 
+        
+            
+  
+            
+
+ 
+
+
+  
+# ====================================================================|========:         
 # TODO: I want a unit test to check the various options of the 
 # constructor but in order to do so, I need to skip model Loading. 
 # There is not need to test model loading. Therefore it needs to be 
@@ -84,6 +164,7 @@ class Client:
     #def __init__(self, *args, **kwargs):  # Issues when: Client(model)
     #def __init__(self, **kwargs): 
     def __init__(self, *args, **kwargs): 
+        
         self._client = None 
         if not args: 
             self._model   = kwargs.get('model', None)
@@ -107,7 +188,7 @@ class Client:
             self._client = ollama.Client()
         elif self._backend == HF_CLIENT_BACKEND: 
             self._client = InferenceClient(token=os.environ['HF_TOKEN'])
-        elif self._backend == LOCAL_BACKEND: 
+        elif self._backend == HF_LOCAL_BACKEND: 
             self._client = LazyPipeline(model=self._model, task="text-generation")
         #elif self._backend == VLLM_BACKEND: 
         #    self._client == ...
@@ -152,12 +233,19 @@ class Client:
             return self._client(messages)
 
         elif isinstance(self._client, InferenceClient): 
+            print(f"DEBUG: Messages = {messages}")
             response = self._client.chat_completion(
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens, 
                 stream=stream)
             return response
+    # max_tokens for OpenAI compatiable 
+    # max_new_tokens for text -generation
+    # TODO: what is the difference between ChatCompletions and Text-Generation 
+
+    # A method for completing conversations using a specified language model.
+    
     # 
     #self.llm(self._build_agent_prompt()[1].content,
     #TypeError: 'Client' object is not callable
@@ -169,6 +257,33 @@ class Client:
             return self._client(messages, **kwargs)
 
         return self.chat(messages = messages)
- 
+
+    def text_generation(self, prompt, cparams=None): 
+        print(f"DEBUG: [Client.text_generation] Starting ... ")
+
+        if not cparams.is_resolved(): 
+            cparams.resolve(backend = self._backend) 
+
+        if isinstance(self._client, InferenceClient): 
+            if not cparams: 
+                return self._client.text_generation(prompt)
+                
+            return self._client.text_generation(prompt, 
+                max_new_tokens = cparams.map["max_new_tokens"], 
+                stream = cparams.map["stream"], 
+            )
+        elif isinstance(self._client, LazyPipeline): 
+            if not cparams: 
+                return self._client(prompt)
+            return self._client(prompt, 
+                max_new_tokens = cparams.max_new_tokens, 
+                #generate_kwargs = {
+                #    #"max_new_tokens" : cparams.map["max_new_tokens"], 
+                #    "max_new_tokens" : cparams.max_new_tokens, 
+                #    #"max_new_tokens" : cparams.max_new_tokens, # This is why resolve is done
+                #}
+            )
+       
+        raise RuntimeError("Something bad")
       
 # --------------------------------------------------------------------|-------:
