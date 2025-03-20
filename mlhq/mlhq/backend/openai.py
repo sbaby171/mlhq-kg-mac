@@ -5,7 +5,7 @@ from transformers import pipeline #, AutoTokenizer, AutoConfig, AutoModelForCaus
 import os
 from mlhq.config import load_model_registry
 #from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Union, overlo
-# --------------------------------------------------------------------|-------:
+# ====================================================================|=======:
 DEFAULT_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 DEFAULT_BACKEND = "local" # pipelines
 HF_LOCAL_BACKEND = "hf-local"
@@ -14,7 +14,16 @@ HF_CLIENT_BACKEND = "hf-client"
 #VLLM_BACKEND = "vllm"
 #TRTLLM_BACKEND = "trtllm"
 BACKENDS = [HF_LOCAL_BACKEND, OLLAMA_BACKEND, HF_CLIENT_BACKEND]
-# --------------------------------------------------------------------|-------:
+# ====================================================================|=======:
+class Backends:
+    HF_LOCAL  = "hf-local"
+    HF_CLIENT = "hf-client"
+    OLLAMA    = "ollama"
+   
+    @staticmethod
+    def choices(): 
+        return [Backends.HF_LOCAL, Backends.HF_CLIENT, Backends.OLLAMA] 
+# ====================================================================|=======:
 
 HF_MODELS = [
     "meta-llama/Llama-3.2-1B-Instruct", 
@@ -45,6 +54,8 @@ class LazyPipeline:
     def pipeline(self):
         if self._pipeline is None:
             print("Loading pipeline for the first time...")
+            print(f"  - model = {self.model}")
+            print(f"  - task = {self.task}")
             self._pipeline = pipeline(self.task, model=self.model, **self.kwargs)
         return self._pipeline
     
@@ -52,6 +63,16 @@ class LazyPipeline:
     #def __call__(self, *args, generate_kwargs={}):
         #print(f"DEBUG: [LazyPipeline]: args = {args}")
         #print(f"DEBUG: [LazyPipeline]: kwargs = {kwargs}")
+        print("issing LazyPipeline.__call__")
+        print(f"args = {args}")
+        print(f"kwargs = {kwargs}")
+
+
+        #if not self.model: 
+        #    if "model" in kwargs: 
+        #        self.model = kwargs["model"]
+        #    else: 
+        #        raise RuntimeError("Need model name")
         return self.pipeline(*args, **kwargs)
         #return self.pipeline(*args, generate_kwargs=generate_kwargs)
 # --------------------------------------------------------------------|-------:
@@ -60,6 +81,8 @@ def _sync_model_and_backend(model, backend):
     within the Client creation.  
     """
     model_registry = load_model_registry()
+    for model_name , details in model_registry.items(): 
+        print(model_name, details )
     print(f"DEBUG: [sync-model-backend]: Model Registry Loaded = {model_registry}")
 
     # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- |-- --- :
@@ -99,6 +122,18 @@ class ClientParams:
         self.map = {} 
         self.stream = False 
         self.max_new_tokens = 128
+        self.temperature = 1.0 
+        self.do_sample = True 
+   
+    def get_kwargs(self,): 
+        #if not self._backend: 
+        #    return {"stream":self.stream, "max_new_tokens"}
+        if self._backend == Backends.HF_LOCAL: 
+            if self.temperature == 0.0: 
+                self.do_sample = False
+                return {"do_sample":self.do_sample,
+                        "max_new_tokens": self.max_new_tokens,
+                }
 
     @property
     def stream(self): 
@@ -108,24 +143,42 @@ class ClientParams:
     def stream(self, boolean):
         self._stream = boolean
 
+    # ----------------------------------------------------------------|-------:
     @property
     def max_new_tokens(self): 
         return self._max_new_tokens
     
     @max_new_tokens.setter
-    def max_new_tokens(self, boolean):
-        self._max_new_tokens = boolean
+    def max_new_tokens(self, value):
+        self._max_new_tokens = value
 
-    def set_max_new_tokens(self, max_new_tokens): 
-        self.max_new_tokens = max_new_tokens 
+    #def set_max_new_tokens(self, max_new_tokens): 
+    #    self.max_new_tokens = max_new_tokens 
+    # ----------------------------------------------------------------|-------:
+    @property
+    def temperature(self): 
+        return self._temperature
+    
+    @temperature.setter
+    def temperature(self, value):
+        self._temperature = value
 
+    #def set_temperature(self, value): 
+    #    self.temperature = value
+    # ----------------------------------------------------------------|-------:
+    @property
+    def do_sample(self): 
+        return self._do_sample
+    
+    @do_sample.setter
+    def do_sample(self, value):
+        self._do_sample = value
 
     #def __getattr__(self, name: str):
     #    return self.__dict__[f"{name}"]
 
     #def __setattr__(self, name, value):
     #    self.__dict__[f"{name}"] = value
-
 
     def is_resolved(self,): 
         return self._resolved
@@ -134,14 +187,17 @@ class ClientParams:
         """The idea odf the resolve function is resolved the internal map 
         and for the user to access the values via the map.  
         """
-        if backend == HF_CLIENT_BACKEND: # Backends.HF_CLIENT:  
-            self.map["stream"] = self.stream
-            self.map["max_new_tokens"] = self.max_new_tokens
-        elif backend == HF_LOCAL_BACKEND: # Backends.HF_CLIENT:  
-            self.map["stream"] = self.stream
-            self.map["max_new_tokens"] = self.max_new_tokens
-        else: 
-            raise RuntimeError(f"Invalid backend '{backend}'")
+        self._backend = backend
+ 
+        #if backend == HF_CLIENT_BACKEND: # Backends.HF_CLIENT:  
+        #    self.map["stream"] = self.stream
+        #    self.map["max_new_tokens"] = self.max_new_tokens
+        #    
+        #elif backend == HF_LOCAL_BACKEND: # Backends.HF_CLIENT:  
+        #    self.map["stream"] = self.stream
+        #    self.map["max_new_tokens"] = self.max_new_tokens
+        #else: 
+        #    raise RuntimeError(f"Invalid backend '{backend}'")
     # ^^^ wait this function is not making much sense. If the user is going 
     # to use cparams.map["<name>"]. Instead, we can just pull directly, 
     # stream = cparams.stream 
@@ -159,63 +215,43 @@ class ClientParams:
 # constructor but in order to do so, I need to skip model Loading. 
 # There is not need to test model loading. Therefore it needs to be 
 # lazy loaded
-# --------------------------------------------------------------------|-------:
+# 
+# NOTE: there is going to be an issue with trying to consildate Clients
+#       and HF pipelines. The pipelines typically need a model at Creation
+#       time. 
+# 
+# For now we will force users to ppass
+#=====================================================================|=======:
 class Client: 
-    #def __init__(self, *args, **kwargs):  # Issues when: Client(model)
-    #def __init__(self, **kwargs): 
-    def __init__(self, *args, **kwargs): 
-        
-        self._client = None 
-        if not args: 
-            self._model   = kwargs.get('model', None)
-        elif len(args) == 1: 
-            self._model = args[-1] 
-        self._backend = kwargs.get('backend', None)
+    #def __init__(self, model="", backend=Backends.HF_LOCAL): 
+    def __init__(self, model, backend): 
+        self.model = model 
+        self.backend = backend 
+        #self.client = None 
 
-        x = _sync_model_and_backend(self._model, self._backend)
-        self._model = x['model']
-        self._backend = x['backend']
+        if self.backend == Backends.OLLAMA: 
+            self.client = ollama.Client()
 
-        print(f"DEBUG: [client] model = {self._model}")
-        print(f"DEBUG: [client] backend = {self._backend}")
-        
-        #if self._model in HF_MODELS: 
-        #    self._backend = "huggingface" 
-        #elif self._model in OLLAMA_MODELS: 
-        #    self._backend = "ollama"
+        elif self.backend == Backends.HF_CLIENT: 
+            self.client = InferenceClient(token=os.environ['HF_TOKEN'])
 
-        if self._backend == OLLAMA_BACKEND: 
-            self._client = ollama.Client()
-        elif self._backend == HF_CLIENT_BACKEND: 
-            self._client = InferenceClient(token=os.environ['HF_TOKEN'])
-        elif self._backend == HF_LOCAL_BACKEND: 
-            self._client = LazyPipeline(model=self._model, task="text-generation")
-        #elif self._backend == VLLM_BACKEND: 
-        #    self._client == ...
-        #elif self._backend == TRTLLM_BACKEND: 
-        #    self._client == ...
+        elif self.backend == Backends.HF_LOCAL: 
+            self.client = LazyPipeline(model=self.model, task="text-generation")
+
         else:
             raise ValueError(f"Unrecognized {self._backend} backend")
-   
-        #if not self._backend: 
-        #    raise RuntimeError("Must provide 'backend' at constructor.")
-        #if self._backend == "ollama": 
-        #    self._client = ollama.Client()
-        #elif self._backend == "vllm": 
-        #    raise ValueError(f"Not supporting {self._backend} backend - atm.")
-        #elif self._backend in ["huggingface", "hf"]: 
-        #    self._client = InferenceClient(token=os.environ['HF_TOKEN'])
-        #    self._backend = "huggingface"
-        #else: 
 
-    
-    def get_backend(self): 
-        return self._backend
+    # ----------------------------------------------------------------|--------: 
     @property 
     def backend(self): 
         return self._backend 
 
-    #def chat(self , model, messages, stream=False): 
+    @backend.setter
+    def backend(self, backend):
+        self._backend = backend
+    # ----------------------------------------------------------------|--------: 
+
+    # ----------------------------------------------------------------|--------: 
     def chat(self, *args, **kwargs): 
         model = kwargs.get('model', self._model)
         messages = kwargs.get('messages', None)
@@ -250,40 +286,44 @@ class Client:
     #self.llm(self._build_agent_prompt()[1].content,
     #TypeError: 'Client' object is not callable
     #def __call__(self, messages, do_sample=True, top_k=10, num_return_sequences=1, eos_token_id=13, max_length=2048): 
+    # ----------------------------------------------------------------|-------:
     def __call__(self, messages, **kwargs): 
-        # To make is callable implies high functionality. Very similiar to 
-        # a HF Pipeline
+
         if isinstance(self._client, LazyPipeline): 
             return self._client(messages, **kwargs)
 
         return self.chat(messages = messages)
+    # ----------------------------------------------------------------|-------:
 
+    # ----------------------------------------------------------------|-------:
+    # NOTE - the issues I am running into is that Client does not need the 
+    #       
     def text_generation(self, prompt, cparams=None): 
-        print(f"DEBUG: [Client.text_generation] Starting ... ")
 
         if not cparams.is_resolved(): 
-            cparams.resolve(backend = self._backend) 
+            cparams.resolve(backend = self.backend) 
 
-        if isinstance(self._client, InferenceClient): 
+        # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- |-- --- :
+        # NOTE - I think HF-Client will automatically set the model based 
+        #        on thae task. that is why I dont get an error at runtime
+        #        when I don't pass the model in at runtime. 
+        if isinstance(self.client, InferenceClient): 
             if not cparams: 
-                return self._client.text_generation(prompt)
+                return self.client.text_generation(prompt)
                 
-            return self._client.text_generation(prompt, 
+            return self.client.text_generation(prompt, 
                 max_new_tokens = cparams.map["max_new_tokens"], 
                 stream = cparams.map["stream"], 
             )
-        elif isinstance(self._client, LazyPipeline): 
+        elif isinstance(self.client, LazyPipeline): 
             if not cparams: 
-                return self._client(prompt)
-            return self._client(prompt, 
-                max_new_tokens = cparams.max_new_tokens, 
-                #generate_kwargs = {
-                #    #"max_new_tokens" : cparams.map["max_new_tokens"], 
-                #    "max_new_tokens" : cparams.max_new_tokens, 
-                #    #"max_new_tokens" : cparams.max_new_tokens, # This is why resolve is done
-                #}
+                return self.client(prompt)
+            return self.client(prompt, 
+                #model = self.model, 
+                #max_new_tokens = cparams.max_new_tokens, 
+                #temperature = cparams.temperature,
+                #do_sample = cparams.do_sample,
+                **cparams.get_kwargs(), 
             )
-       
-        raise RuntimeError("Something bad")
-      
+        raise RuntimeError("Client class `{type(self.client)}` is unsupported.")
 # --------------------------------------------------------------------|-------:
