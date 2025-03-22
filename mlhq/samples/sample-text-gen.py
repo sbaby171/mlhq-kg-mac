@@ -1,19 +1,55 @@
 #from mlhq.backend.openai import Client
 #from mlhq.backend import Client
-from mlhq import Client
+from mlhq import Client, ClientParams, Backends
 from pyfiglet import Figlet
+import argparse
+import sys 
+
+# ============================================================================:
+def __handle_cli_args(): 
+     parser = argparse.ArgumentParser()
+     #parser = parser.add_argument("--model", type=str, choices=Models.choices())
+     parser.add_argument("--backend", type=str, 
+         default = Backends.HF_CLIENT,
+         choices=Backends.choices()
+     )
+     # ^^^ TODO: See both of these should be coming from the model-registry 
+     args = parser.parse_args()
+     return args
+
+# ============================================================================:
+if __name__ == "__main__": 
+    args = __handle_cli_args() 
+
+    FIG = Figlet(font="slant") # larry3d, slant, chunky
+    print(FIG.renderText("MLHQ - TexGen")) 
+
+    model = "meta-llama/LLama-3.1-8B-Instruct"
+    backend = args.backend  # "hf-local"
+
+    #client = Client(model=model, backend=backend)
+    #client = Client(backend=backend)
+    client = Client(model, backend)
+    print(type(client))
+    print("Client.model = ", client.model)
+    print("Client.backend = ", client.backend)
 
 
+    cparams = ClientParams() 
+    cparams.max_new_tokens = 128 
+    cparams.temperature = 0.0
+    cparams.do_sample = False 
+    prompt = "Can you tell me a *mom* joke?"
+    response = client.text_generation(prompt, cparams)
+    print(response)
 
-FIG = Figlet(font="slant") # larry3d, slant, chunky
-print(FIG.renderText("MLHQ - TexGen")) 
+    cparams.max_new_tokens = 200
+    cparams.temperature = 1.0
+    cparams.do_sample = True
+    response = client.text_generation(prompt, cparams)
+    print(response)
+    sys.exit(1)
 
-
-model = "meta-llama/LLama-3.1-8B-Instruct"
-backend = "hf-local"
-
-client = Client(model=model, backend=backend)
-print(type(client))
 # Note - OpenAI API doesn't have a `text-generation`. They simply use
 #        a Chat (create completions) for that. But HuggingFace Inference
 #        client does have a text-generation. 
@@ -51,14 +87,15 @@ print(type(client))
 # 
 # For now, lets pass it in, and do a check at inference. 
 # 
-from mlhq import ClientParams
+#from mlhq import ClientParams
 
 # Case -1 
 # cparams = ClientParams(max_new_tokens = 128)
 
 # Case - 2
-cparams = ClientParams() 
-cparams.set_max_new_tokens(128)
+#cparams = ClientParams() 
+#cparams.set_max_new_tokens(128)
+#cparams.stream = True 
 #cparams.max_new_tokens = 128 
 
 # Case - 3 
@@ -70,9 +107,8 @@ cparams.set_max_new_tokens(128)
 # params = {"max_new_tokens":128}
 # cparams.set_params(params)
 
-response = client.text_generation("The huggingface_hub library is ", cparams)
-
-print(response)
+#response = client.text_generation("The huggingface_hub library is ", cparams)
+#print(response)
 # https://huggingface.co/docs/huggingface_hub/guides/inference#openai-compatibility 
 
 

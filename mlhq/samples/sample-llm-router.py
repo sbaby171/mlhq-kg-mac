@@ -1,6 +1,7 @@
 from transformers import pipeline, GenerationConfig, AutoTokenizer
 import sys
 import time  
+import torch
 from datetime import datetime
 from mlhq.utils import load_jsonl, write_json, get_datetime_str, proceed
 """
@@ -13,6 +14,13 @@ wrong.
 This may be why console logs with a `2>&1 | tee`
 """
 skip_proceed = False 
+# Check if MPS is available (for Apple Silicon Macs)
+if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    device = torch.device("mps")
+    print("Using MPS device")
+else:
+    device = torch.device("cpu")
+    print("Using CPU device")
 
 
 # ----------------------------------------------------------------------------:
@@ -102,6 +110,9 @@ for domain in domains:
     qa_data = load_jsonl(qa_paths[domain])
     results[domain] = [] 
     count = 10
+
+
+    Model = pipe.model
     for i, qdata in enumerate(qa_data, start=1): 
         if i > count: break 
         qid = qdata["qid"]
@@ -116,27 +127,45 @@ for domain in domains:
             "content": f"{prefix} {ques}"
         }
         ]
-        if hasattr(pipe, "tokenizer"):
-            prompt_text = ""
-            for msg in messages:
-                prompt_text += f"{msg['role']}: {msg['content']}\n"
-            num_input_tokens = len(pipe.tokenizer(prompt_text)['input_ids'])
-        else:
-            prompt_text = ""
-            for msg in messages:
-                prompt_text += f"{msg['role']}: {msg['content']}\n"
-            num_input_tokens = len(tokenizer(prompt_text)['input_ids'])
+        #if hasattr(pipe, "tokenizer"):
+        #    prompt_text = ""
+        #    for msg in messages:
+        #        prompt_text += f"{msg['role']}: {msg['content']}\n"
+        #    num_input_tokens = len(pipe.tokenizer(prompt_text)['input_ids'])
+        #else:
+        #    prompt_text = ""
+        #    for msg in messages:
+        #        prompt_text += f"{msg['role']}: {msg['content']}\n"
+        #    num_input_tokens = len(tokenizer(prompt_text)['input_ids'])
+
+        prompt_text = ""
+        for msg in messages:
+            prompt_text += f"{msg['role']}: {msg['content']}\n"
+        num_input_tokens = len(pipe.tokenizer(prompt_text)['input_ids'])
+        # --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  :
+        prefill_start = time.time()
+        inputs = tokenizer(prompt_text, return_tensors="pt")
+        with torch.no_grad():
+            outputs = Model(input_ids=inputs['input_ids'])
+        prefill_end = time.time()
+        prefill_time = prefill_end - prefill_start
+        # --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  :
 
         # --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  :
-        start_time = time.time()
+        gen_start = time.time()
         response = pipe(messages)
-        end_time = time.time()
-        inference_time = end_time - start_time  # Time in seconds
+        gen_end = time.time()
+        # --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  :
+
+        #total_time = gen_end - prefill_start
+        total_time = gen_end - gen_start
+        generation_time = total_time - prefill_time
 
         classified = response[0]['generated_text'][-1]['content']
         num_output_tokens = len(tokenizer(classified)['input_ids'])
 
-        tokens_per_second = num_output_tokens / inference_time if inference_time > 0 else 0
+        #tokens_per_second = num_output_tokens / inference_time if inference_time > 0 else 0
+        generation_tokens_per_second = num_output_tokens / generation_time if generation_time > 0 else 0
 
         # client.chat(messages=messages)
         # client.last_response(raw=True)
@@ -148,7 +177,13 @@ for domain in domains:
         print(f"  - Input tokens: {num_input_tokens}, Output tokens: {num_output_tokens}")
         print(f"  - SP+PX tokens: {system_prompt_len + prefix_len}")
         print(f"  -  QUES tokens: {len(pipe.tokenizer(ques)['input_ids'])}")
-        print(f"    Inference time: {inference_time:.2f}s, Tokens/second: {tokens_per_second:.2f}")
+        #print(f"    Inference time: {inference_time:.2f}s, Tokens/second: {tokens_per_second:.2f}")
+        print(f"    Input tokens: {num_input_tokens}")
+        print(f"    Output tokens: {num_output_tokens}")
+        print(f"    Prefill time: {prefill_time:.4f}s")
+        print(f"    Generation time: {generation_time:.4f}s")
+        print(f"    Total time: {total_time:.4f}s")
+        print(f"    Generation tokens/second: {generation_tokens_per_second:.2f}")
         if "Internal Response" in classified: 
             classified = "Internal Response"
         elif "External Response" in classified: 
