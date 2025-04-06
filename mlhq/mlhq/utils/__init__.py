@@ -1,6 +1,7 @@
 import sys 
 import json 
 from datetime import datetime
+import numpy as np 
 # --------------------------------------------------------------------|-------:
 def proceed(skip=False):                                                                     
     if skip: return 
@@ -28,4 +29,18 @@ def write_json(data, filename, indent=4):
 # --------------------------------------------------------------------|-------:
 def get_datetime_str(): 
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+# --------------------------------------------------------------------|-------:
+
+def mean_reverse_diff(x): 
+    """ This function calculates takes the mean of difference between 
+    values in a list, starting from the back. This useful when gathering 
+    multiple time stamps during a TBOT text-generation latency measurement
+    """
+    deltas = np.diff(x[::-1]) * -1    
+    return np.mean(deltas)
+    #i = 1; j = 2; ys = [] 
+    #for idx in range(len(x)-1): 
+    #    ys.append(x[-i]-x[-j])
+    #    i+=1; j+=1
+    #return np.mean(ys)
 # --------------------------------------------------------------------|-------:

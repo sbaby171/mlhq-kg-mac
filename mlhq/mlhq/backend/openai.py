@@ -5,6 +5,19 @@ from transformers import pipeline #, AutoTokenizer, AutoConfig, AutoModelForCaus
 import os
 from mlhq.config import load_model_registry
 #from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Union, overlo
+from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
+import torch
+from threading import Thread
+import time
+import sys
+import os 
+import numpy as np 
+#import evaluate
+from collections import OrderedDict
+#from IPython.display import clear_output
+from mlhq.utils import load_jsonl, write_json
+from mlhq.utils import proceed 
+from mlhq.utils import mean_reverse_diff
 # ====================================================================|=======:
 DEFAULT_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 DEFAULT_BACKEND = "local" # pipelines
@@ -202,11 +215,125 @@ class ClientParams:
     # to use cparams.map["<name>"]. Instead, we can just pull directly, 
     # stream = cparams.stream 
         
+
+
+#model_name = "Qwen/Qwen2.5-7B-Instruct"
+#tokenizer = AutoTokenizer.from_pretrained(model_name)
+#model = AutoModelForCausalLM.from_pretrained(model_name)
+def llm_generate(model, tokenizer, inputs, 
+                 max_new_tokens = 128, 
+                 temperature = None, 
+                 top_p = None, 
+                 top_k = None, 
+                 repetition_penalty = None,
+                 ignore_eos=False, 
+                 do_sample = True,
+                 stop_strings=None, 
+        ):
+        rd = {} # Return-Dictionary 
+        streamer = TextIteratorStreamer(tokenizer, 
+                                skip_prompt=True, 
+                                skip_special_tokens=True)
+
+        gen_kwargs = {
+            "input_ids": inputs.input_ids,
+            "attention_mask": inputs.attention_mask,
+            "streamer": streamer,
+        }
+
+        if hasattr(model.generation_config, "max_new_tokens") and (not max_new_tokens): 
+            max_new_tokens = model.generation_config.max_new_tokens
+        if hasattr(model.generation_config, "temperature") and (not temperature): 
+            temperature = model.generation_config.temperature
+        if hasattr(model.generation_config, "top_p") and (not top_p): 
+            top_p = model.generation_config.top_p
+        if hasattr(model.generation_config, "top_k") and (not top_k): 
+            top_k = model.generation_config.top_k
+        if hasattr(model.generation_config, "repetition_penalty") and (not repetition_penalty): 
+            repetition_penalty = model.generation_config.repetition_penalty
+   
+        gen_kwargs['tokenizer'] = tokenizer
+        gen_kwargs['stop_strings'] = stop_strings
+        gen_kwargs['do_sample'] = do_sample
+        gen_kwargs["temperature"] = temperature  
+        gen_kwargs["max_new_tokens"] = max_new_tokens  
+        gen_kwargs["top_p"] = top_p
+        gen_kwargs["top_k"] = top_k
+        gen_kwargs["repetition_penalty"] = repetition_penalty 
+        gen_kwargs['do_sample'] = model.generation_config.do_sample 
+        gen_kwargs['bos_token_id'] = model.generation_config.bos_token_id
+        gen_kwargs['eos_token_id'] = model.generation_config.eos_token_id
+    
+        if ignore_eos: 
+            gen_kwargs["eos_token_id"] = None
+
+        thread = Thread(target=model.generate, kwargs=gen_kwargs)
+        thread.start()
+
+        prefill_start = time.time()
+        first_token = next(streamer)
+        prefill_end = time.time()
+        prefill_time = prefill_end - prefill_start
+        
+        gen_text = first_token 
+        num_gen_tokens = 1
+
+        tbot_times = []
+        gen_start = time.time()
+    
+        for token in streamer:
+            tbot_times.append(time.time())
+            gen_text += token
+            num_gen_tokens += 1
+        gen_end = time.time()
+        gen_time =  gen_end - gen_start
+
+        save_gen_kwargs = {}
+        for k, v in gen_kwargs.items(): 
+            if k in ["input_ids", "attention_mask", "streamer"]: continue 
+            save_gen_kwargs[k] = v
             
+        rd["prefill-time-s"]       = prefill_time
+        rd["ttft-s"]               = prefill_time 
+        rd["average-tbot-s"]       = mean_reverse_diff(tbot_times)
+        rd["generation-time-s"]    = gen_time 
+        rd["generated-text"]       = gen_text
+        rd["num-generated-tokens"] = num_gen_tokens
+        rd["generation-tps"]       = num_gen_tokens / gen_time
+        rd["total-tps"]            = num_gen_tokens / (prefill_time + gen_time) 
+        rd["generation-args"]      = save_gen_kwargs
+        rd["total-latency-s"]      = prefill_time + gen_time
+        rd["num-input-tokens"]     = inputs.input_ids.shape[1]
+        return rd             
   
             
+# ============================================================================:
+class HFLocalClient:  
+    def __init__(self, model_name): 
+        self.model_name = model_name
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForCausalLM.from_pretrained(model_name)
+        if torch.cuda.is_available(): 
+            self.device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available(): 
+            self.device = "mps"
+        else: 
+            self.device = "cpu"
+        self.model = self.model.to(self.device)
+        print(f"DEBUG: Device set to: {self.device}")
 
- 
+    def generate(self, messages, **kwargs): 
+        prompt = self.tokenizer.apply_chat_template(
+            messages, tokenize=False,
+            add_generation_prompt=True
+        )
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        # RUN CLASSIFIER-LLM
+        rd = llm_generate(self.model, self.tokenizer, inputs, **kwargs)
+        # EXTRACT CLASSIFICATION
+        return rd 
+
+# ============================================================================:
 
 
   
@@ -223,37 +350,38 @@ class ClientParams:
 # For now we will force users to ppass
 #=====================================================================|=======:
 class Client: 
-    #def __init__(self, model="", backend=Backends.HF_LOCAL): 
-    def __init__(self, model, backend): 
+    def __init__(self, model, backend, token=None): 
         self.model = model 
         self.backend = backend 
-        #self.client = None 
 
         if self.backend == Backends.OLLAMA: 
             self.client = ollama.Client()
 
         elif self.backend == Backends.HF_CLIENT: 
-            self.client = InferenceClient(token=os.environ['HF_TOKEN'])
+            self.client = InferenceClient(token=token)
+            #self.client = InferenceClient(token=os.environ['HF_TOKEN'])
 
         elif self.backend == Backends.HF_LOCAL: 
-            self.client = LazyPipeline(model=self.model, task="text-generation")
-
+            #self.client = LazyPipeline(model=self.model, task="text-generation")
+            self.client = HFLocalClient(model)
         else:
             raise ValueError(f"Unrecognized {self._backend} backend")
-
+     
+        self._tokenizer = AutoTokenizer.from_pretrained(model)
+        # ^^^ TODO this will fail with Ollama 
     # ----------------------------------------------------------------|--------: 
-    @property 
-    def backend(self): 
-        return self._backend 
-
-    @backend.setter
-    def backend(self, backend):
-        self._backend = backend
-    # ----------------------------------------------------------------|--------: 
-
+    def text_generation(self, prompt, **kwargs): 
+        if isinstance(prompt, list): # assuming its a list-dict openai-compatiable
+             chat_text = self._tokenizer.apply_chat_template(                                      
+                      prompt, 
+                      tokenize=True,                                                              
+                      add_generation_prompt=True)                                  
+             prompt = self._tokenizer.decode(chat_text)
+        return  self.client.text_generation(prompt, **kwargs)  
+                                                                                
     # ----------------------------------------------------------------|--------: 
     def chat(self, *args, **kwargs): 
-        model = kwargs.get('model', self._model)
+        model = kwargs.get('model', self.model)
         messages = kwargs.get('messages', None)
         if messages == None: 
             raise RuntimeError("Must Provide `messages`.")
@@ -262,15 +390,15 @@ class Client:
       
         print(f"DEBUG [chat]: max-tokens={max_tokens}")
       
-        if isinstance(self._client, ollama.Client): 
-            return self._client.chat(model=model, messages=messages, stream=stream)
+        if isinstance(self.client, ollama.Client): 
+            return self.client.chat(model=model, messages=messages, stream=stream)
 
-        elif isinstance(self._client, LazyPipeline): 
-            return self._client(messages)
+        elif isinstance(self.client, LazyPipeline): 
+            return self.client(messages)
 
-        elif isinstance(self._client, InferenceClient): 
+        elif isinstance(self.client, InferenceClient): 
             print(f"DEBUG: Messages = {messages}")
-            response = self._client.chat_completion(
+            response = self.client.chat_completion(
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens, 
@@ -280,7 +408,15 @@ class Client:
     # max_new_tokens for text -generation
     # TODO: what is the difference between ChatCompletions and Text-Generation 
 
-    # A method for completing conversations using a specified language model.
+
+    # ------------------------------------------------------------------------:
+    # TODO: An issue with this below is the fact that a HFModel.generate()
+    #       does not require 
+    def generate(self, messages, **kwargs): 
+        if isinstance(self.client, HFLocalClient): 
+            assert type(messages) == list, f"Only accepting Messages (list-of-dicts). Received type = {type(messages)}"
+            # TODO: mlhq.utils.verify_messages_struct(messages)
+            return self.client.generate(messages, **kwargs)
     
     # 
     #self.llm(self._build_agent_prompt()[1].content,
@@ -298,32 +434,32 @@ class Client:
     # ----------------------------------------------------------------|-------:
     # NOTE - the issues I am running into is that Client does not need the 
     #       
-    def text_generation(self, prompt, cparams=None): 
-
-        if not cparams.is_resolved(): 
-            cparams.resolve(backend = self.backend) 
-
-        # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- |-- --- :
-        # NOTE - I think HF-Client will automatically set the model based 
-        #        on thae task. that is why I dont get an error at runtime
-        #        when I don't pass the model in at runtime. 
-        if isinstance(self.client, InferenceClient): 
-            if not cparams: 
-                return self.client.text_generation(prompt)
-                
-            return self.client.text_generation(prompt, 
-                max_new_tokens = cparams.map["max_new_tokens"], 
-                stream = cparams.map["stream"], 
-            )
-        elif isinstance(self.client, LazyPipeline): 
-            if not cparams: 
-                return self.client(prompt)
-            return self.client(prompt, 
-                #model = self.model, 
-                #max_new_tokens = cparams.max_new_tokens, 
-                #temperature = cparams.temperature,
-                #do_sample = cparams.do_sample,
-                **cparams.get_kwargs(), 
-            )
-        raise RuntimeError("Client class `{type(self.client)}` is unsupported.")
+   
+    #def text_generation(self, prompt, cparams=None): 
+    #    if not cparams.is_resolved(): 
+    #        cparams.resolve(backend = self.backend) 
+    #
+    #    # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- |-- --- :
+    #    # NOTE - I think HF-Client will automatically set the model based 
+    #    #        on thae task. that is why I dont get an error at runtime
+    #    #        when I don't pass the model in at runtime. 
+    #    if isinstance(self.client, InferenceClient): 
+    #        if not cparams: 
+    #            return self.client.text_generation(prompt)
+    #            
+    #        return self.client.text_generation(prompt, 
+    #            max_new_tokens = cparams.map["max_new_tokens"], 
+    #            stream = cparams.map["stream"], 
+    #        )
+    #    elif isinstance(self.client, LazyPipeline): 
+    #        if not cparams: 
+    #            return self.client(prompt)
+    #        return self.client(prompt, 
+    #            #model = self.model, 
+    #            #max_new_tokens = cparams.max_new_tokens, 
+    #            #temperature = cparams.temperature,
+    #            #do_sample = cparams.do_sample,
+    #            **cparams.get_kwargs(), 
+    #        )
+    #    raise RuntimeError("Client class `{type(self.client)}` is unsupported.")
 # --------------------------------------------------------------------|-------:
