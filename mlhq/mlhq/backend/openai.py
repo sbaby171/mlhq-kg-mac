@@ -333,6 +333,26 @@ class HFLocalClient:
         # EXTRACT CLASSIFICATION
         return rd 
 
+    def text_generation(self, prompt, **kwargs): 
+        if "stop" in kwargs: 
+            kwargs["stop_strings"] = kwargs["stop"]
+            del kwargs["stop"]
+        print(f"DEBUG: HFLocalClient: text-generation kwargs: {kwargs}")
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        #print(type(inputs), inputs)
+        #print(f"input shape: {inputs.input_ids.shape}")
+        gen_kwargs = {
+            "input_ids": inputs.input_ids,
+            "attention_mask": inputs.attention_mask,
+            "tokenizer": self.tokenizer
+        }
+        kwargs.update(gen_kwargs)
+        #return self.model.generate(inputs,**kwargs)
+        #return self.model.generate(**kwargs)
+        resp = self.model.generate(**kwargs) 
+        #print(f"shape ({type(resp)}): {resp.shape}")
+        return self.tokenizer.decode(resp[0][inputs.input_ids.shape[1]:-1])
+
 # ============================================================================:
 
 
@@ -377,6 +397,10 @@ class Client:
                       tokenize=True,                                                              
                       add_generation_prompt=True)                                  
              prompt = self._tokenizer.decode(chat_text)
+        # ^^^ This block of code convert the incoming messages struct
+        #     to a single string to be easily support model.generate
+        #
+        #     perhaps convert to utility function.
         return  self.client.text_generation(prompt, **kwargs)  
                                                                                 
     # ----------------------------------------------------------------|--------: 
