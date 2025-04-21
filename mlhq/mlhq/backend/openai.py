@@ -18,6 +18,7 @@ from collections import OrderedDict
 from mlhq.utils import load_jsonl, write_json
 from mlhq.utils import proceed 
 from mlhq.utils import mean_reverse_diff
+import logging
 # ====================================================================|=======:
 DEFAULT_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 DEFAULT_BACKEND = "local" # pipelines
@@ -310,6 +311,9 @@ def llm_generate(model, tokenizer, inputs,
 # ============================================================================:
 class HFLocalClient:  
     def __init__(self, model_name): 
+        self.logger = logging.getLogger(f"{__name__}.HFLocalClient")
+        self.logger.info(f"Initializing HFLocalClient with model_name={model_name}")
+
         self.model_name = model_name
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -320,7 +324,7 @@ class HFLocalClient:
         else: 
             self.device = "cpu"
         self.model = self.model.to(self.device)
-        print(f"DEBUG: Device set to: {self.device}")
+        self.logger.info(f"Device set to: {self.device}")
 
     def generate(self, messages, **kwargs): 
         prompt = self.tokenizer.apply_chat_template(
@@ -337,21 +341,17 @@ class HFLocalClient:
         if "stop" in kwargs: 
             kwargs["stop_strings"] = kwargs["stop"]
             del kwargs["stop"]
-        print(f"DEBUG: HFLocalClient: text-generation kwargs: {kwargs}")
+        self.logger.info(f"Text-generation kwargs: {kwargs}")
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-        #print(type(inputs), inputs)
-        #print(f"input shape: {inputs.input_ids.shape}")
         gen_kwargs = {
             "input_ids": inputs.input_ids,
             "attention_mask": inputs.attention_mask,
             "tokenizer": self.tokenizer
         }
         kwargs.update(gen_kwargs)
-        #return self.model.generate(inputs,**kwargs)
-        #return self.model.generate(**kwargs)
-        resp = self.model.generate(**kwargs) 
-        #print(f"shape ({type(resp)}): {resp.shape}")
-        return self.tokenizer.decode(resp[0][inputs.input_ids.shape[1]:-1])
+        response = self.model.generate(**kwargs) 
+        self.logger.info(f"Incoming/Outgoing text: {self.tokenizer.decode(response[0])}")
+        return self.tokenizer.decode(response[0][inputs.input_ids.shape[1]:-1])
 
 # ============================================================================:
 
@@ -369,39 +369,106 @@ class HFLocalClient:
 # 
 # For now we will force users to ppass
 #=====================================================================|=======:
+import logging
+import os
+from datetime import datetime
+
+# Configure logging at the module level
+log_dir = os.path.join(os.getcwd(), "logs")
+os.makedirs(log_dir, exist_ok=True)
+log_filename = os.path.join(log_dir, f"mlhq_{datetime.now().strftime('%Y%m%d')}.log")
+def get_log_level():
+    log_level_str = os.environ.get("MLHQ_LOG_LEVEL", "INFO").upper()
+    log_levels = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL
+    }
+    return log_levels.get(log_level_str, logging.INFO) 
+
+# Configure the root logger once (outside of any class)
+def configure_logging():
+    if not logging.getLogger().handlers:  # Only configure if not already configured
+        logging.basicConfig(
+            level=get_log_level(),
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_filename),
+                logging.StreamHandler()
+            ]
+        )
+
+configure_logging()
 class Client: 
     def __init__(self, model, backend, token=None): 
+        self._id = id(self)
         self.model = model 
         self.backend = backend 
+        self.tokenizer = AutoTokenizer.from_pretrained(model)# TODO: fail at ollama
+        self._system_prompt = None
+        self._prefix_prompt = None
+
+        self.logger = logging.getLogger(f"{__name__}.Client")
+        self.logger.info(f"Initializing Client-{self._id} with model={model}, backend={backend}, token={'provided' if token else 'None'}")
 
         if self.backend == Backends.OLLAMA: 
             self.client = ollama.Client()
+            self.logger.debug("Initialized Ollama client")
 
         elif self.backend == Backends.HF_CLIENT: 
+            if not token: 
+                token = os.environ['HF_INF_CLIENT_TOKEN']
+                self.logger.info(f"Loading token: {token[:2]}***{token[-4:]}")
+
             self.client = InferenceClient(token=token)
-            #self.client = InferenceClient(token=os.environ['HF_TOKEN'])
+            self.logger.debug("Initialized HuggingFace Inference client")
 
         elif self.backend == Backends.HF_LOCAL: 
-            #self.client = LazyPipeline(model=self.model, task="text-generation")
             self.client = HFLocalClient(model)
+            self.logger.debug("Initialized HuggingFace local client")
         else:
-            raise ValueError(f"Unrecognized {self._backend} backend")
-     
-        self._tokenizer = AutoTokenizer.from_pretrained(model)
-        # ^^^ TODO this will fail with Ollama 
+            error_msg = f"Unrecognized {self.backend} backend"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        #self._enable_json_logging = True
+        #self._log_dir = os.path.join(os.getcwd(), "logs") 
+        #self._json_log_path = os.path.join(log_dir, f"mlhq-client-{self._id}-{datetime.now().strftime('%Y%m%d')}.jsonl")
+
+    def get_id(self): 
+        return self._id
+
+    def get_model_name(self):
+        return self.model     
+
     # ----------------------------------------------------------------|--------: 
+    def set_system_prompt(self,sys_prompt): 
+        self.logger.info(f"Setting Client-{self._id} system prompt")
+        self._system_prompt = sys_prompt
+       
+
+    # ----------------------------------------------------------------|--------: 
+    # @Client
     def text_generation(self, prompt, **kwargs): 
-        if isinstance(prompt, list): # assuming its a list-dict openai-compatiable
-             chat_text = self._tokenizer.apply_chat_template(                                      
+        """ 
+        If `prompt` is a list, this method will assume it an OpenAI API
+        chat completions compliant object (list-of-dictionaries). In this case
+        we will tokenize the entire list using the Client's tokenizer and it's 
+        built in template
+
+        """
+        if isinstance(prompt, list):  # for OpenAI AIP messages
+             chat_text = self.tokenizer.apply_chat_template(                                      
                       prompt, 
                       tokenize=True,                                                              
-                      add_generation_prompt=True)                                  
-             prompt = self._tokenizer.decode(chat_text)
-        # ^^^ This block of code convert the incoming messages struct
-        #     to a single string to be easily support model.generate
-        #
-        #     perhaps convert to utility function.
-        return  self.client.text_generation(prompt, **kwargs)  
+                      add_generation_prompt=True) # IDS
+             prompt = self.tokenizer.decode(chat_text)
+        if isinstance(self.client, InferenceClient):
+            self.logger.info(f"Text-generation-{self._id} kwargs: {kwargs}")
+        response = self.client.text_generation(prompt, **kwargs)
+        return response 
                                                                                 
     # ----------------------------------------------------------------|--------: 
     def chat(self, *args, **kwargs): 
