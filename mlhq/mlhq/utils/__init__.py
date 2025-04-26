@@ -2,11 +2,23 @@ import sys
 import json 
 from datetime import datetime
 import numpy as np 
+from rich.console import Console                                                
+from rich.panel import Panel                                                                                                           
+
+def panel_print(tag, content, fc = "bold magenta", width = 80, border_style='blue'):
+    console = Console()
+    #panel = Panel(f"\n[{fc}]{tag}[/{fc}]\n{content}[{fc}]{tag}[/{fc}]",
+    panel = Panel(f"\n[{fc}]{tag}[/{fc}]\n{content}",
+        width = width,                        
+        border_style = border_style 
+    )                                                                           
+    console.print(panel)
 # --------------------------------------------------------------------|-------:
-def proceed(skip=False):                                                                     
+def proceed(skip=False, return_bool=False): 
     if skip: return 
     _proceed = input("\nContinue (y/n)? ")                                         
-    if _proceed in ["Y", 'y']: return                                              
+    if _proceed in ["Y", 'y']:  return True 
+    if return_bool: return False
     print("Exiting")                                                               
     sys.exit(0)      
 # --------------------------------------------------------------------|-------:

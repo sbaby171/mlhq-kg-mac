@@ -1,12 +1,17 @@
 from mlhq import Client
+import subprocess
 from mlhq.utils import panel_print, load_json, load_jsonl, proceed
 import os 
+import re
 import sys 
 from datetime import datetime
 import logging
 import json
 import argparse
 from collections import OrderedDict
+from pyfiglet import Figlet
+RE_SCORE = re.compile("Score:\s+(?P<score>\d+)")
+RE_REASON = re.compile("Justification:\s+(?P<reason>.*)($|\n)") 
 # ============================================================================:
 class GraphInterface: 
 
@@ -319,15 +324,18 @@ class BasicClient:
                 for m in messages: 
                     f.write(json.dumps(m) + '\n')
         return response
-
 # ============================================================================:
 def __handle_cli_args(): 
     parser = argparse.ArgumentParser()
     #parser.add_argument('--config', type=str,required=True)
     parser.add_argument('--question', type=str, default="What is the capital of California?")
     parser.add_argument('--use-graph-questions', action="store_true")
-    parser.add_argument('--domain', type=str, default="biomedical")
+    parser.add_argument('--domain', type=str, default="test")
+    parser.add_argument('--num-ques', type=int, default=3)
+    parser.add_argument('--start', type=int, default=1)
+    #parser.add_argument('--go', type=bool, action="store_true")
     args = parser.parse_args()
+
     return args 
 # ============================================================================:
 if __name__ == "__main__": 
@@ -336,11 +344,10 @@ if __name__ == "__main__":
     #.........................................................................:
     now = datetime.now()                                                       
     timestamp = now.strftime("%Y%m%d_%H%M%S")                                  
-
     logs_dir = os.path.join(os.getcwd(), "logs", "e2e-baseline") 
-    classifier_logs_dir = os.path.join(os.getcwd(), "logs", "e2e-baseline", "classifier") 
-    base_logs_dir = os.path.join(os.getcwd(), "logs", "e2e-baseline", "base") 
-    judge_logs_dir = os.path.join(os.getcwd(), "logs", "e2e-baseline", "judge") 
+    classifier_logs_dir = os.path.join(os.getcwd(), "logs", "e2e-baseline", "RouteLLM") 
+    base_logs_dir = os.path.join(os.getcwd(), "logs", "e2e-baseline", "QALLM") 
+    judge_logs_dir = os.path.join(os.getcwd(), "logs", "e2e-baseline", "JudgeLLM") 
     os.makedirs(logs_dir, exist_ok=True)
     os.makedirs(classifier_logs_dir, exist_ok=True)
     os.makedirs(base_logs_dir, exist_ok=True)
@@ -349,7 +356,7 @@ if __name__ == "__main__":
     #.........................................................................:
     #config = load_json(args.config)
     classifier_config = {
-        "model"         : "meta-llama/Llama-3.1-8B-Instruct", 
+        "model"         : "Qwen/Qwen2.5-3B-Instruct", #"meta-llama/Llama-3.2-1B-Instruct", 
         "backend"       : "hf-local", 
         "system_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/llm-classifier-system-prompt-1.txt",  
         "prefix_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/llm-classifier-prefix-prompt-1.txt", 
@@ -357,7 +364,7 @@ if __name__ == "__main__":
         "gen_params"    : {"temperature":0.1, "max_new_tokens":200}
     }
     qa_config = {
-        "model"         : "meta-llama/Llama-3.1-8B-Instruct", 
+        "model"         : "Qwen/Qwen2.5-3B-Instruct", #"meta-llama/Llama-3.2-1B-Instruct", 
         "backend"       : "hf-local", 
         "system_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/qa-system-prompt-1.txt",  
         "prefix_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/qa-prefix-prompt-1.txt", 
@@ -365,65 +372,55 @@ if __name__ == "__main__":
         "gen_params"    : {"temperature":0.1, "max_new_tokens":320}
     }
     judge_config = {
-        "model"         : "meta-llama/Llama-3.3-70B-Instruct", 
-        "backend"       : "hf-client", 
+        "model"         : "Qwen/Qwen2.5-7B-Instruct", #"meta-llama/Llama-3.1-8B-Instruct", #"meta-llama/Llama-3.3-70B-Instruct", 
+        "backend"       : "hf-local", #"hf-client", 
         "system_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/final-judge-system-prompt-msee-1.txt", 
         "prefix_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/final-judge-prefix-prompt-msee-1.txt", 
         "log_dir"       : judge_logs_dir, 
         "gen_params"    : {"temperature":0.1, "max_new_tokens":320}
     }
+    
+    RE_TAG = re.compile("[LQ]\d+b-[LQ]\d+b-[LQ]\d+b")
+    tag = []
+    if   'Llama-3.1-8B' in classifier_config['model']: tag.append("L8b-")
+    elif 'Llama-3.2-1B' in classifier_config['model']: tag.append("L1b-")
+    elif 'Llama-3.2-3B' in classifier_config['model']: tag.append("L3b-")
+    elif 'Llama-3.3-70B' in classifier_config['model']: tag.append("L70b-")
+    elif 'Qwen2.5-1.5B'  in classifier_config['model']: tag.append("Q1b-")
+    elif 'Qwen2.5-3B'    in classifier_config['model']: tag.append("Q3b-")
+    elif 'Qwen2.5-7B'    in classifier_config['model']: tag.append("Q7b-")
+    elif 'Qwen2.5-14B'   in classifier_config['model']: tag.append("Q14b-")
+
+    if   'Llama-3.1-8B'  in qa_config['model']: tag.append("L8b-")
+    elif 'Llama-3.2-1B'  in qa_config['model']: tag.append("L1b-")
+    elif 'Llama-3.2-3B'  in qa_config['model']: tag.append("L3b-")
+    elif 'Llama-3.3-70B' in qa_config['model']: tag.append("L70b-")
+    elif 'Qwen2.5-1.5B'  in qa_config['model']: tag.append("Q1b-")
+    elif 'Qwen2.5-3B'    in qa_config['model']: tag.append("Q3b-")
+    elif 'Qwen2.5-7B'    in qa_config['model']: tag.append("Q7b-")
+    elif 'Qwen2.5-14B'   in qa_config['model']: tag.append("Q14b-")
+
+
+    if   'Llama-3.1-8B'  in judge_config['model']: tag.append("L8b")
+    elif 'Llama-3.2-1B'  in judge_config['model']: tag.append("L1b")
+    elif 'Llama-3.2-3B'  in judge_config['model']: tag.append("L3b")
+    elif 'Llama-3.3-70B' in judge_config['model']: tag.append("L70b")
+    elif 'Qwen2.5-1.5B'  in judge_config['model']: tag.append("Q1b")
+    elif 'Qwen2.5-3B'    in judge_config['model']: tag.append("Q3b")
+    elif 'Qwen2.5-7B'    in judge_config['model']: tag.append("Q7b")
+    elif 'Qwen2.5-14B'   in judge_config['model']: tag.append("Q14b")
+
+    tag = "".join(tag)
+    if not RE_TAG.search(tag): 
+        raise RuntimeError(f"Invalid tag: {tag}")
     #.........................................................................:
-    domain = 'test'
+    domain = args.domain 
     qa_paths = {
         'test' : [
             {'qid':0, 'question':"What is the capital of California?",'answer':"Sacramento"}, 
             {'qid':1, 'question':"How many states are in the US?",'answer':"50"}, 
-        ]
-    }
-    # TODO: We should add to the JUDGELLM system/prefix prompts that the ground truth 
-    # answers could simply be a list of keywords. 
- 
-    # ........................................................................:
-    RouteLLM = BasicClient(**classifier_config)
-    QALLM    = BasicClient(**qa_config)
-    JudgeLLM = JudgeClient(**judge_config)
-
-    id_keys = {'RouteLLM':RouteLLM.get_id(),'QALLM' : QALLM.get_id(),'JudgeLLM' : JudgeLLM.get_id()}
-    with open(e2e_log_file, 'a') as f:   
-        f.write(json.dumps(id_keys) + '\n') 
-    # ........................................................................:
-    
-    # ........................................................................:
-    #qa_data = load_jsonl(qa_paths[domain])                                      
-    qa_data = qa_paths[domain]  
-    for i, qdata in enumerate(qa_data):                                         
-        question = qdata['question']                                            
-        ground_truth  = qdata['answer']                                              
-        qid      = qdata['qid']  
-        
-        classification = RouteLLM.query(question)
-        # If internal --> pass to QALLM 
-        # If External --> GraphAgent 
-        response       = QALLM.query(question)
-        judgement      = JudgeLLM.judge(question , response, ground_truth)
-
-        panel_print(tag="Question", content=question)
-        panel_print(tag=f"RouteLLM-{RouteLLM.get_id()}", content=classification)
-        panel_print(tag=f"QALLM-{QALLM.get_id()}", content=response)
-        panel_print(tag=f"JudgeLLM-{JudgeLLM.get_id()}", content=judgement)
-
-        proceed()
-    
-    # ........................................................................:
-    sys.exit(0)
-
-    print(f"DEBUG: Dumping incoming config: {os.path.abspath(args.config)}")
-    for k,v in config.items(): 
-        print("DEBUG: %24s --> %s"%(k,v))
-    #.........................................................................:
-    
-    domain = args.domain 
-    qa_paths = {                                                                       
+            {'qid':2, 'question':"Who was the first president of the USA?",'answer':"George Washington"}, 
+        ], 
         "biomedical" : "/Users/msbabo/code/Graph-CoT/data/processed_data/biomedical/data.jsonl",
         "amazon" : "/Users/msbabo/code/Graph-CoT/data/processed_data/amazon/data.jsonl",
         "dblp" : "/Users/msbabo/code/Graph-CoT/data/processed_data/dblp/data.jsonl",
@@ -435,25 +432,165 @@ if __name__ == "__main__":
         "maple-materials-science": "/Users/msbabo/code/Graph-CoT/data/processed_data/maple/Materials_Science/data.jsonl",
         "maple-chemistry": "/Users/msbabo/code/Graph-CoT/data/processed_data/maple/Chemistry/data.jsonl", 
     }
-    qa_data = load_jsonl(qa_paths[domain])
-    for i, qdata in enumerate(qa_data):                                         
-        question = qdata['question']                                            
-        answer   = qdata['answer']                                              
-        qid      = qdata['qid']  
+    # TODO: We should add to the JUDGELLM system/prefix prompts that the ground truth 
+    # answers could simply be a list of keywords. 
+ 
+    # ........................................................................:
+    RouteLLM = BasicClient(**classifier_config)
+    QALLM    = BasicClient(**qa_config)
+    JudgeLLM = JudgeClient(**judge_config)
+
+    #id_keys = {'RouteLLM':RouteLLM.get_id(),'QALLM' : QALLM.get_id(),'JudgeLLM' : JudgeLLM.get_id()}
+    objs = [ 
+        {"COMMAND": " ".join(sys.argv)}, 
+        {'RouteLLM_id':RouteLLM.get_id(), "RouteLLM_log":RouteLLM.get_log_file()}, 
+        {'QALLM_id':QALLM.get_id(), "QALLM_log":QALLM.get_log_file()}, 
+        {'JudgeLLM_id':JudgeLLM.get_id(), "JudgeLLM_log":JudgeLLM.get_log_file()}, 
+    ] 
+    if domain == "test": 
+        objs.append({'domain':domain, "path": None})
+    else: 
+        objs.append({'domain':domain, "path": qa_paths[domain]})
+
+    objs.append({"RouteLLM_config":classifier_config})
+    objs.append({"QALLM_config":qa_config})
+    objs.append({"JudgeLLM_config":judge_config})
         
-        response, judgement = ga._query_with_judgement(question)
+    with open(e2e_log_file, 'a') as f:   
+        for obj in objs: 
+            f.write(json.dumps(obj) + '\n') 
+    # ........................................................................:
+    
+    # ........................................................................:
+    #qa_data = load_jsonl(qa_paths[domain])                                      
+    if domain == "test": 
+         qa_data = qa_paths[domain]  
+    else: 
+         qa_data = load_jsonl(qa_paths[domain]) 
+    routes = [] # Routes INTERNAL = 0 , external=1
+    scores = [] # judge scores
+     
 
+    print(f"\nDEBUG: Domain: {domain}")
+    print(f"DEBUG: Max number of questions: {args.num_ques}")
+    print(f"DEBUG: Total number of incoming questions: {len(qa_data)}")
+    proceed() 
+
+    ques_answered = 0
+    for i, qdata in enumerate(qa_data):                                         
+
+        if i < args.start - 1: 
+            continue 
+
+        if (args.num_ques) == (ques_answered): 
+            print(f"\n Reaching max-questions limit: {args.num_ques} == {ques_answered}")
+            break
+
+        question = qdata['question']                                            
+        ground_truth  = qdata['answer']                                              
+        qid      = int(qdata['qid']) 
+
+        print("- "*40)
+        print(f" qid={qid} | questions_answered={ques_answered}") 
+        print("- "*40)
+        ques_answered += 1
+        assert qid == i, f"qid ({qid}) must equal index ({i})"
+   
+        result = {
+            "classification":"", 
+            "judge_score":-99,
+            "judge_reason":"",
+            "qid":qid, 
+            "question": question, 
+            "ground_truth": ground_truth, 
+        }
+        # ....................................................................: 
+        classification = RouteLLM.query(question)
+        if "INTERNAL_KNOWLEDGE" in classification and "EXTERNAL_KNOWLEDGE" in classification: 
+            raise RuntimeError(f"Found bouth internal and external in classification: {classification}")
+
+        #if   classification == "INTERNAL_KNOWLEDGE": 
+        if   "INTERNAL_KNOWLEDGE" in classification:
+            result['classification'] = classification 
+            routes.append(0)
+        #elif classification == "EXTERNAL_KNOWLEDGE": 
+        elif "EXTERNAL_KNOWLEDGE" in classification: 
+            result['classification'] = classification 
+            routes.append(1)
+        else:
+            #self.logging.warning(f"No proper classification: {classification}") 
+            print(f"No proper classification: {classification}") 
+            result['classification'] = classification 
+            routes.append(1)
+            # Fro cases that the lower LLMs can properly characterize will automatically be binned into EXTERNAL bucket
+        # ....................................................................: 
+        response = QALLM.query(question)
+
+        judgement = JudgeLLM.judge(question , response, ground_truth)
+        m = RE_SCORE.search(judgement) 
+        if m: score = int(m.group('score'))
+        else: self.logging.warning(f"No proper score: {judgment}") 
+
+        m = RE_REASON.search(judgement)
+        if m: reason = str(m.group('reason'))
+        else: self.logging.warning(f"No proper reason: {judgment}") 
+        result["judge_score"]  = score
+        result["judge_reason"] = reason 
+        scores.append(int(score))
+        # TODO: Pass regexes into Client
+       
         panel_print(tag="Question", content=question)
-        panel_print(tag=f"Response-{ga._core_llm._id}", content=response)
-        panel_print(tag=f"Judgement-{ga._judge_llm._id}", content=judgement)
-        panel_print(tag="Answer", content=answer)
+        panel_print(tag=f"RouteLLM-{RouteLLM.get_id()}", content=classification)
+        panel_print(tag=f"QALLM-{QALLM.get_id()}", content=response)
+        panel_print(tag=f"JudgeLLM-{JudgeLLM.get_id()}", content=judgement)
+        panel_print(tag=f"Ground-Truth", content=ground_truth, border_style="yellow")
 
-        #gen_params = {"max_new_tokens":256, "temperature":0.5}
-        #gen_params = {"max_new_tokens":1024, "temperature":0.0, "top_p":1.0, "top_k":0, "do_sample":False}
-        gen_params = {"max_new_tokens":512, "do_sample":False}
-        ja = final_judge.judge(question, response, answer, gen_params)
-        print(ja)
-        panel_print(tag="Final-Judge", content=ja, border_style='cyan')
-        proceed()
+        with open(e2e_log_file, 'a') as f:   
+            f.write(json.dumps(result) + '\n') 
+
+        #if proceed(skip=args.go, return_bool=True): continue 
+        #else: break 
+    
+
+    print(f"\nRoutes: {routes}")
+    print(f"Scores: {scores}")
+    print(f"Log file: {e2e_log_file}") 
+
+    with open(e2e_log_file, 'a') as f:   
+        f.write(json.dumps({"routes":routes}) + '\n') 
+        f.write(json.dumps({"scores":scores}) + '\n') 
+        f.write(json.dumps({"questions_answered": ques_answered}) + '\n') 
+        f.write(json.dumps({"qid_start_idx":args.start-1}) + '\n') 
+
+    figlet = Figlet(font='slant') 
+    print(figlet.renderText("Phase 3.0 - Summary"))
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    command = [
+    'python', '/Users/msbabo/code/mlhq-kg-mac/mlhq/results-handler.py', 
+    '--jsonl', e2e_log_file, 
+    '--to', '/Users/msbabo/official-runs', 
+    '--tag', tag
+    ]
+    print("\nRunning: %s"%(" ".join(command)))
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error: {e}")
+
+
+    print(figlet.renderText("TODOs"))
+    print("TODO: Add to JudgeLLM that its ground-truth is a simple list of key words")
+    print("      - yeah but in many cases (like who wrote this paper) its precise")
+    print("      - the biomedical case is wishy washy ")
+    print("")
+    print("TODO: The RouteLLM is never sending EXTERNAL (L8B)")
+    print("       - amazon sends out ")
+    # ........................................................................:
+    sys.exit(0)
+
+    print(f"DEBUG: Dumping incoming config: {os.path.abspath(args.config)}")
+    for k,v in config.items(): 
+        print("DEBUG: %24s --> %s"%(k,v))
+    #.........................................................................:
      
         
