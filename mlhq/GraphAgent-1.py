@@ -3,10 +3,14 @@ from mlhq.utils import load_json, load_jsonl, panel_print, proceed
 from tools.retriever import Retriever
 import argparse
 import sys
+import time 
+import collections 
 import os
 import re 
 import json 
 import string
+import torch 
+import gc 
 # -----------------------
 import networkx as nx
 import numpy as np
@@ -17,6 +21,41 @@ from textwrap import dedent
 # ============================================================================:
 # ============================================================================:
 # ============================================================================:
+def get_size(obj, seen=None):
+    """Recursively find the size of an object and its contents in bytes."""
+    size = sys.getsizeof(obj)
+    if seen is None:
+        seen = set()
+    obj_id = id(obj)
+    if obj_id in seen:
+        return 0
+    # Important: Mark this object as seen
+    seen.add(obj_id)
+    
+    if isinstance(obj, dict):
+        size += sum(get_size(k, seen) + get_size(v, seen) for k, v in obj.items())
+    elif isinstance(obj, (list, tuple, set, collections.deque)):
+        size += sum(get_size(item, seen) for item in obj)
+    elif hasattr(obj, '__dict__'):
+        size += get_size(obj.__dict__, seen)
+    elif hasattr(obj, '__slots__'):
+        size += sum(get_size(getattr(obj, slot), seen) for slot in obj.__slots__ if hasattr(obj, slot))
+        
+    return size
+
+def format_size(size_bytes):
+    """Format the size in a human-readable format."""
+    for unit in ['', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']:
+        if size_bytes < 1024.0 or unit == 'PiB':
+            if unit == '':
+                return f"{size_bytes} bytes"
+            return f"{size_bytes:.1f}{unit}"
+        size_bytes /= 1024.0
+
+def dict_memory_usage(dictionary):
+    """Calculate and return the memory usage of a dictionary in human-readable format."""
+    memory_bytes = get_size(dictionary)
+    return format_size(memory_bytes)
 
 def split_checks(input_string):                                                 
     pattern = r'\w+\[.*?\]'                                                     
@@ -89,7 +128,8 @@ qa_paths = {
         "maple-chemistry": "/Users/msbabo/code/Graph-CoT/data/processed_data/maple/Chemistry/data.jsonl",
 }                                                                           
 graph_paths = {
-    "biomedical": "/Users/msbabo/code/Graph-CoT/data/processed_data/biomedical/graph.json"
+    "biomedical": "/Users/msbabo/code/Graph-CoT/data/processed_data/biomedical/graph.json", 
+    "maple-materials-science" : "/Users/msbabo/code/Graph-CoT/data/processed_data/maple/Materials_Science/graph.json", 
 }
 # SYSTEM_PROMPT.format(examples=examples)
 SYSTEM_PROMPT = """
@@ -125,7 +165,8 @@ Take as many steps as necessary, clearly documenting your thought process.
 
 (END OF EXAMPLES)
 """
-EXAMPLES = dedent(""" 
+EXAMPLES = {
+    "biomedical" :  dedent(""" 
         ### Example-1:
         Question: What compounds can be used to treat Crohn's disease? Please answer the compound names rather than IDs.
         Thought 1: The question is related to a disease node (Crohn's disease). We need to find the node in the graph.
@@ -160,10 +201,54 @@ EXAMPLES = dedent("""
         Action 2: NodeDegree[DB00201, 'Compound-causes-Side Effect']
         Observation 2: 58
         Thought 3: The number of 'Compound-causes-Side Effect' neighbors are 58.
-        Action 3: Finish[58]""")
+        Action 3: Finish[58]"""),
 
-GRAPH_DEF = """There are eleven types of nodes in the graph: Anatomy, Biological Process, Cellular Component, Compound, Disease, Gene, Molecular Function, Pathway, Pharmacologic Class, Side Effect, Symptom.\nEach node has name feature.\nThere are these types of edges: Anatomy-downregulates-Gene, Anatomy-expresses-Gene, Anatomy-upregulates-Gene, Compound-binds-Gene, Compound-causes-Side Effect, Compound-downregulates-Gene, Compound-palliates-Disease, Compound-resembles-Compound, Compound-treats-Disease, Compound-upregulates-Gene, Disease-associates-Gene, Disease-downregulates-Gene, Disease-localizes-Anatomy, Disease-presents-Symptom, Disease-resembles-Disease, Disease-upregulates-Gene, Gene-covaries-Gene, Gene-interacts-Gene, Gene-participates-Biological Process, Gene-participates-Cellular Component, Gene-participates-Molecular Function, Gene-participates-Pathway, Gene-regulates-Gene, Pharmacologic Class-includes-Compound."""
+    "maple": dedent("""
+        ### Example-1: 
+        Question: When was the paper Strongly Interacting Higgs Sector in the Minimal Standard Model published?
+        Thought 1: The question is asking some basic information of a node (Strongly Interacting Higgs Sector in the Minimal Standard Model). We need to find the node in the graph.
+        Action 1: RetrieveNode[Strongly Interacting Higgs Sector in the Minimal Standard Model]
+        Observation 1: The ID of this node is 3101448248.
+        Thought 2: The question is asking the published date of a paper, we need to check the node feature (year) from the graph.
+        Action 2: NodeFeature[3101448248, year]
+        Observation 2: 1993
+        Thought 3: The published date of the paper is 1993.
+        Action 3: Finish[1993]
 
+        ### Example-2: 
+        Question: How many authors do the paper Mass Accretion Rates in Self-Regulated Disks of T Tauri Stars have?
+        Thought 1: The question is asking information of a node (Mass Accretion Rates in Self-Regulated Disks of T Tauri Stars). We need to find the node in the graph.
+        Action 1: RetrieveNode[Mass Accretion Rates in Self-Regulated Disks of T Tauri Stars]
+        Observation 1: The ID of this node is 2090642949.
+        Thought 2: The question is asking the number of authors of a paper, we need to calculate the node's author neighbor degree from the graph.
+        Action 2: NodeDegree[2090642949, author]
+        Observation 2: 2
+        Thought 3: The number of the authors is 2
+        Action 3: Finish[2]
+
+        ### Example-3: 
+        Question: What was the publish venue of the paper Mass Accretion Rates in Self-Regulated Disks of T Tauri Stars?
+        Thought 1: The question is asking information of a node (Mass Accretion Rates in Self-Regulated Disks of T Tauri Stars). We need to find the node in the graph.
+        Action 1: RetrieveNode[Mass Accretion Rates in Self-Regulated Disks of T Tauri Stars]
+        Observation 1: The ID of this node is 2090642949.
+        Thought 2: The question is asking the published venue of a paper, we need to check the node's venue neighbor from the graph.
+        Action 2: NeighbourCheck[2090642949, venue]
+        Observation 2: ['1980519', '1053242']
+        Thought 3: The ID of the published venue are 1980519 and 1053242. We need to get their names.
+        Action 3: NodeFeature[1980519, name], NodeFeature[1053242, name]
+        Observation 3: the astrophysical journal, the atmosphere journal
+        Thought 4: The name of the published venues are the astrophysical journal and the atmosphere journal
+        Action 4: Finish[the astrophysical journal, the atmosphere journal]"""), 
+
+} 
+
+GRAPH_DEF = {
+    "biomedical" : """There are eleven types of nodes in the graph: Anatomy, Biological Process, Cellular Component, Compound, Disease, Gene, Molecular Function, Pathway, Pharmacologic Class, Side Effect, Symptom.\nEach node has name feature.\nThere are these types of edges: Anatomy-downregulates-Gene, Anatomy-expresses-Gene, Anatomy-upregulates-Gene, Compound-binds-Gene, Compound-causes-Side Effect, Compound-downregulates-Gene, Compound-palliates-Disease, Compound-resembles-Compound, Compound-treats-Disease, Compound-upregulates-Gene, Disease-associates-Gene, Disease-downregulates-Gene, Disease-localizes-Anatomy, Disease-presents-Symptom, Disease-resembles-Disease, Disease-upregulates-Gene, Gene-covaries-Gene, Gene-interacts-Gene, Gene-participates-Biological Process, Gene-participates-Cellular Component, Gene-participates-Molecular Function, Gene-participates-Pathway, Gene-regulates-Gene, Pharmacologic Class-includes-Compound.""", 
+
+    "maple": """Definition of the graph: There are three types of nodes in the graph: paper, author and venue.                       
+        Paper nodes have features: title, abstract, year and label. Author nodes have features: name. Venue nodes have features: name.
+        Paper nodes are linked to their author nodes, venue nodes, reference paper nodes and cited_by paper nodes. Author nodes are linked to their paper nodes. Venue nodes are linked to their paper nodes."""
+} 
 
 
 # PREFIX_PROMPT.format(graph_definition = graph_definition, question=question, scratchpad=scratchpad)
@@ -214,6 +299,9 @@ class GraphInterface:
 
     def __len__(self,):                                                            
         return len(self.graph)  
+
+    def get_mem_size(self,): 
+        return dict_memory_usage(self.graph)
 
     def _reset(self, graph):
         graph_index = {}
@@ -267,7 +355,16 @@ class GraphAgent:
         self.gen_params = gen_params
 
         self.graph = GraphInterface(self.graph_path) 
-        self.retriever = Retriever(self.graph.graph, self.domain, self.embedder_model) 
+        print(f"DEBUG: [GraphAgent.init]: Graph memory-usage: {self.graph.get_mem_size()}")
+        embed_cache_base = "/Users/msbabo/code/mlhq-kg-mac/mlhq/embed_cache_dir/"
+        embed_cache_dir = os.path.join(embed_cache_base, domain)
+        print(f"DEBUG: [GraphAgent.init] Domain = {domain}")
+        print(f"DEBUG: [GraphAgent.init] Embed Cache Directory = {embed_cache_dir}")
+        if not os.path.exists(embed_cache_dir): 
+            raise RuntimeError(f"Invalid embedded cache directory: {embed_cache_dir}")
+        # cache-all-mpnet-base-v2.pkl
+        self.embed_cache_dir = embed_cache_dir
+        self.retriever = Retriever(self.graph.graph, self.domain, self.embedder_model, cache_dir = self.embed_cache_dir) 
         # ^^^ TODO: Integrate GraphInterface and Retriever
         self.client = Client(model=model, backend=backend)
         self.finished = False
@@ -470,16 +567,20 @@ if __name__ == "__main__":
     else: 
         start_idx = int(args.start_idx)
         do_qid = None 
- 
+
+    if domain.startswith("maple"): 
+        _domain = "maple"
+    else: 
+        _domain = domain
     config = {
         "model"   : model, 
         "backend" : backend , 
-        "domain"  : domain, 
+        "domain"  : domain,  # This is passed to Retriever class 
         "system_prompt" : SYSTEM_PROMPT, 
-        "examples" : EXAMPLES, 
+        "examples" : EXAMPLES[_domain], 
         "prefix_prompt": PREFIX_PROMPT, 
-        "graph_definition": GRAPH_DEF, 
-        "gen_params" : {"temperature":0.2, "max_new_tokens":200, "stop":["Observation"],}, 
+        "graph_definition": GRAPH_DEF[_domain], 
+        "gen_params" : {"temperature":0.2, "max_new_tokens":256, "stop":["Observation"],}, 
         "graph_path" : graph_paths[domain], 
         "embedder_model" : embedder,  
     }
@@ -505,6 +606,12 @@ if __name__ == "__main__":
         panel_print(tag=f"Domain-{domain}: Question ({qid}):",content=question)
         panel_print(tag=f"Domain-{domain}:   Answer ({qid}):",content=answer)
         proceed() 
+
+        if ques_answered >= 1: 
+            print(f"\nClearing memory. Setting 5 seconds timeout...")
+            torch.mps.empty_cache()  # Clear cached memory
+            gc.collect()  # Trigger garbage collection
+            time.sleep(5)
   
      
         ga.reset()                   # TODO: why here? This should be better integrated
@@ -519,14 +626,18 @@ if __name__ == "__main__":
             panel_print(tag="Final Scratchpad", content="\n".join(ga.scratchpad))
             panel_print(tag="Ground-truth", content=answer) 
             panel_print(tag="Correct?", content=ga._correct)
-            print("\nScratchpad")
-            print(  "----------")
+            print(f"Question: {question}")
+            print("\nthought - trace")
+            print(  "---------------")
             print("\n".join(ga.scratchpad))
+            print(f"\nGround Truth: {answer}")
             # TODO: Store results 
         elif (step == ga.steps - 1): # read out on the last step
-            print("\nScratchpad")
-            print(  "----------")
+            print(f"Question: {question}")
+            print("\nthought - trace")
+            print(  "---------------")
             print("\n".join(ga.scratchpad))
+            print(f"\nGround Truth: {answer}")
            
         ques_answered += 1
         proceed()
