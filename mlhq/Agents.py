@@ -6,6 +6,9 @@ import re
 import sys 
 from datetime import datetime
 import logging
+import torch 
+import gc
+import time
 import json
 import argparse
 from collections import OrderedDict
@@ -356,7 +359,7 @@ if __name__ == "__main__":
     #.........................................................................:
     #config = load_json(args.config)
     classifier_config = {
-        "model"         : "Qwen/Qwen2.5-3B-Instruct", #"meta-llama/Llama-3.2-1B-Instruct", 
+        "model"         : "Qwen/Qwen2.5-0.5B-Instruct", #"meta-llama/Llama-3.2-1B-Instruct", 
         "backend"       : "hf-local", 
         "system_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/llm-classifier-system-prompt-1.txt",  
         "prefix_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/llm-classifier-prefix-prompt-1.txt", 
@@ -364,7 +367,7 @@ if __name__ == "__main__":
         "gen_params"    : {"temperature":0.1, "max_new_tokens":200}
     }
     qa_config = {
-        "model"         : "Qwen/Qwen2.5-3B-Instruct", #"meta-llama/Llama-3.2-1B-Instruct", 
+        "model"         : "meta-llama/Llama-3.1-8B-Instruct", 
         "backend"       : "hf-local", 
         "system_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/qa-system-prompt-1.txt",  
         "prefix_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/qa-prefix-prompt-1.txt", 
@@ -372,7 +375,7 @@ if __name__ == "__main__":
         "gen_params"    : {"temperature":0.1, "max_new_tokens":320}
     }
     judge_config = {
-        "model"         : "Qwen/Qwen2.5-7B-Instruct", #"meta-llama/Llama-3.1-8B-Instruct", #"meta-llama/Llama-3.3-70B-Instruct", 
+        "model"         : "meta-llama/Llama-3.1-8B-Instruct", #"meta-llama/Llama-3.3-70B-Instruct", 
         "backend"       : "hf-local", #"hf-client", 
         "system_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/final-judge-system-prompt-msee-1.txt", 
         "prefix_prompt" : "/Users/msbabo/code/mlhq-kg-mac/mlhq/system-prompts/msee/final-judge-prefix-prompt-msee-1.txt", 
@@ -386,6 +389,7 @@ if __name__ == "__main__":
     elif 'Llama-3.2-1B' in classifier_config['model']: tag.append("L1b-")
     elif 'Llama-3.2-3B' in classifier_config['model']: tag.append("L3b-")
     elif 'Llama-3.3-70B' in classifier_config['model']: tag.append("L70b-")
+    elif 'Qwen2.5-0.5B'  in classifier_config['model']: tag.append("Q05b-")
     elif 'Qwen2.5-1.5B'  in classifier_config['model']: tag.append("Q1b-")
     elif 'Qwen2.5-3B'    in classifier_config['model']: tag.append("Q3b-")
     elif 'Qwen2.5-7B'    in classifier_config['model']: tag.append("Q7b-")
@@ -413,6 +417,7 @@ if __name__ == "__main__":
     tag = "".join(tag)
     if not RE_TAG.search(tag): 
         raise RuntimeError(f"Invalid tag: {tag}")
+    tag = tag + f"__{args.domain}"
     #.........................................................................:
     domain = args.domain 
     qa_paths = {
@@ -436,6 +441,7 @@ if __name__ == "__main__":
     # answers could simply be a list of keywords. 
  
     # ........................................................................:
+    # Note, that one 
     RouteLLM = BasicClient(**classifier_config)
     QALLM    = BasicClient(**qa_config)
     JudgeLLM = JudgeClient(**judge_config)
@@ -550,6 +556,10 @@ if __name__ == "__main__":
 
         #if proceed(skip=args.go, return_bool=True): continue 
         #else: break 
+
+        torch.mps.empty_cache()  # Clear cached memory
+        gc.collect()  # Trigger garbage collection
+        time.sleep(1)
     
 
     print(f"\nRoutes: {routes}")

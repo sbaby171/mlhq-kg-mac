@@ -317,14 +317,25 @@ class HFLocalClient:
         self.model_name = model_name
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(model_name)
-        if torch.cuda.is_available(): 
+        #if torch.cuda.is_available(): 
+        #    self.device = "cuda"
+        #elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available(): 
+        #    self.device = "mps"
+        #else: 
+        #    self.device = "cpu"
+        #self.device = "auto" # "mps" # TODO: Remove hardcoded 
+        #self.model = self.model.to(self.device)
+
+        if torch.cuda.is_available():
             self.device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available(): 
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            # For Apple Silicon (M1/M2/M3 with Metal Performance Shaders)
             self.device = "mps"
-        else: 
+        else:
             self.device = "cpu"
+
         self.model = self.model.to(self.device)
-        self.logger.info(f"Device set to: {self.device}")
+        self.logger.info(f"Using device={self.device}")
 
     def generate(self, messages, **kwargs): 
         prompt = self.tokenizer.apply_chat_template(
@@ -402,6 +413,10 @@ def configure_logging():
 
 configure_logging()
 class Client: 
+    """ 
+    The goal of this class is to emulate the OpenAI API client. 
+
+    """
     def __init__(self, model, backend, token=None): 
         self._id = id(self)
         self.model = model 
@@ -427,7 +442,7 @@ class Client:
 
         elif self.backend == Backends.HF_LOCAL: 
             self.client = HFLocalClient(model)
-            self.logger.debug("Initialized HuggingFace local client")
+            self.logger.debug("Initialized HuggingFace Local client")
         else:
             error_msg = f"Unrecognized {self.backend} backend"
             self.logger.error(error_msg)

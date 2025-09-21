@@ -1,5 +1,5 @@
 from mlhq import Client
-from mlhq.utils import load_json, load_jsonl, panel_print, proceed
+from mlhq.utils import load_json, load_jsonl, panel_print, proceed, get_datetime_str
 from tools.retriever import Retriever
 import argparse
 import sys
@@ -7,8 +7,10 @@ import time
 import collections 
 import os
 import re 
+import ast
 import json 
 import string
+import logging
 import torch 
 import gc 
 # -----------------------
@@ -21,6 +23,64 @@ from textwrap import dedent
 # ============================================================================:
 # ============================================================================:
 # ============================================================================:
+feature_neighbor_keys = [                                             
+    "Anatomy-downregulates-Gene",                                      
+    "Anatomy-expresses-Gene",                                          
+    "Anatomy-upregulates-Gene",                                        
+    "Compound-binds-Gene",                                             
+    "Compound-causes-Side Effect",                                     
+    "Compound-downregulates-Gene",                                     
+    "Compound-palliates-Disease",                                      
+    "Compound-resembles-Compound",                                     
+    "Compound-treats-Disease",                                         
+    "Compound-upregulates-Gene",                                       
+    "Disease-associates-Gene",                                         
+    "Disease-downregulates-Gene",                                      
+    "Disease-localizes-Anatomy",                                       
+    "Disease-presents-Symptom",                                        
+    "Disease-resembles-Disease", 
+    "Disease-upregulates-Gene",                                        
+    "Gene-covaries-Gene",                                              
+    "Gene-interacts-Gene",                                             
+    "Gene-participates-Biological Process",                            
+    "Gene-participates-Cellular Component",                            
+    "Gene-participates-Molecular Function",                            
+    "Gene-participates-Pathway",                                       
+    "Gene-regulates-Gene",                                             
+    "Pharmacologic Class-includes-Compound",                           
+]  
+def parse_intersection_check(input_string):
+    print(f"DEBUG: [parse_intersection_check]: {input_string}")
+    # Use regex to extract the content inside the outer brackets
+    match = re.search(r'IntersectionCheck\[(.*)\]', input_string.strip())
+    if not match:
+        return None, None
+    
+    # Get the content inside the outer brackets
+    content = match.group(1)
+    
+    # Safely evaluate the content as Python literals
+    try:
+        # Add outer brackets to make it a list
+        lists_content = "[" + content + "]"
+        parsed_lists = ast.literal_eval(lists_content)
+        
+        if len(parsed_lists) >= 2:
+            return parsed_lists[0], parsed_lists[1]
+        else:
+            return None, None
+    except:
+        # Fallback to regex approach if ast.literal_eval fails
+        lists_match = re.match(r'\[(.*)\],\s*\[(.*)\]', content)
+        if not lists_match:
+            return None, None
+        
+        try:
+            list1 = ast.literal_eval("[" + lists_match.group(1) + "]")
+            list2 = ast.literal_eval("[" + lists_match.group(2) + "]")
+            return list1, list2
+        except:
+            return None, None
 def get_size(obj, seen=None):
     """Recursively find the size of an object and its contents in bytes."""
     size = sys.getsizeof(obj)
@@ -117,7 +177,8 @@ def EM(answer, key) -> bool:
 # ============================================================================:
 qa_paths = {                                                                
     "biomedical" : "/Users/msbabo/code/Graph-CoT/data/processed_data/biomedical/data.jsonl",
-        "amazon" : "/Users/msbabo/code/Graph-CoT/data/processed_data/amazon/data.jsonl",
+    #"biomedical" : "/Users/msbabo/code/Graph-CoT/data/processed_data/biomedical/maxes.jsonl",
+    "amazon" : "/Users/msbabo/code/Graph-CoT/data/processed_data/amazon/data.jsonl",
         "dblp" : "/Users/msbabo/code/Graph-CoT/data/processed_data/dblp/data.jsonl",
         "goodreads": "/Users/msbabo/code/Graph-CoT/data/processed_data/goodreads/data.jsonl",
         "legal": "/Users/msbabo/code/Graph-CoT/data/processed_data/legal/data.jsonl",
@@ -130,6 +191,8 @@ qa_paths = {
 graph_paths = {
     "biomedical": "/Users/msbabo/code/Graph-CoT/data/processed_data/biomedical/graph.json", 
     "maple-materials-science" : "/Users/msbabo/code/Graph-CoT/data/processed_data/maple/Materials_Science/graph.json", 
+    "maple-physics" : "/Users/msbabo/code/Graph-CoT/data/processed_data/maple/Physics/graph.json",
+    "maple-chemistry" : "/Users/msbabo/code/Graph-CoT/data/processed_data/maple/Chemistry/graph.json",
 }
 # SYSTEM_PROMPT.format(examples=examples)
 SYSTEM_PROMPT = """
@@ -151,6 +214,43 @@ Count the number of neighbors of the specified type ('neighbor_type') connected 
 
 (4) **NeighbourCheck[Node, neighbor_type]**:  
 List neighbors of a specified type ('neighbor_type') connected to the node ('Node').
+
+Guidelines for Answering:
+- For questions asking "how many" or numeric questions, explicitly use NodeDegree.
+- For questions requiring names, descriptions, or unique identifiers, explicitly retrieve node features with NodeFeature.
+- For yes/no questions, check relevant neighbors with NeighbourCheck or NodeDegree and clearly state your reasoning and final answer explicitly as "Yes" or "No".
+
+Take as many steps as necessary, clearly documenting your thought process.
+
+## Examples -  demonstrating reasoning clearly:
+
+{examples}
+
+(END OF EXAMPLES)
+"""
+
+SYSTEM_PROMPT = """
+You are GraphAgent, an LLM that answers questions through explicit step-by-step reasoning and calling graph tools(aka actions). The steps are: 
+- **Thought** (what you are thinking, why you are taking an action)
+- **Action** (interaction with graph through one of the allowed operations below)
+- **Observation** (the result from your action)
+
+Allowed actions (choose according to your reasoning):
+
+(1) **RetrieveNode[keyword]**:  
+Retrieve the node from the graph best matching the keyword or query.
+
+(2) **NodeFeature[Node, feature]**:  
+Get the value of a specific attribute ('feature') of a given node ('Node'). Use attributes such as names, descriptions, or identifiers like inchikeys. Do not return internal IDs unless explicitly necessary.
+
+(3) **NodeDegree[Node, neighbor_type]**:  
+Count the number of neighbors of the specified type ('neighbor_type') connected to the node ('Node').
+
+(4) **NeighbourCheck[Node, neighbor_type]**:  
+List neighbors of a specified type ('neighbor_type') connected to the node ('Node').
+
+(5) **IntersectionCheck[list1, list2]**:
+Returns the shared elements between two lists.
 
 Guidelines for Answering:
 - For questions asking "how many" or numeric questions, explicitly use NodeDegree.
@@ -201,7 +301,22 @@ EXAMPLES = {
         Action 2: NodeDegree[DB00201, 'Compound-causes-Side Effect']
         Observation 2: 58
         Thought 3: The number of 'Compound-causes-Side Effect' neighbors are 58.
-        Action 3: Finish[58]"""),
+        Action 3: Finish[58]
+
+        ### Example-4:
+        Question: Can you describe the biological operations of the L2HGDH gene?
+        Thought 1: To describe the biological operations of the L2HGDH gene, I first need to find the node corresponding to this gene in the graph.
+        Action 1: RetrieveNode[L2HGDH]
+        Observation 1: The ID of this retrieval target node is 79944.
+        Thought 2: Now that I have the ID of the L2HGDH gene node, I should find out which biological processes, cellular components, and molecular functions it participates in.
+        Action 2: NeighbourCheck[79944, 'Gene-participates-Biological Process']
+        Observation 2: ['GO:0055114', 'GO:0019752', 'GO:0043648', 'GO:0006103']
+        Thought 3: The gene L2HGDH participates in several biological processes. Let's find out what these processes are by retrieving their names.
+        Action 3: NodeFeature[GO:0055114, name], NodeFeature[GO:0019752, name], NodeFeature[GO:0043648, name], NodeFeature[GO:0006103, name]
+        Observation 3: oxidation-reduction process, carboxylic acid metabolic process, dicarboxylic acid metabolic process, 2-oxoglutarate metabolic process
+        Thought 4: The biological operations of gene L2HGDH is oxidation-reduction process, carboxylic acid metabolic process, dicarboxylic acid metabolic process, 2-oxoglutarate metabolic process 
+        Action 4: Finish[oxidation-reduction process, carboxylic acid metabolic process, dicarboxylic acid metabolic process, 2-oxoglutarate metabolic process]
+"""),
 
     "maple": dedent("""
         ### Example-1: 
@@ -314,20 +429,40 @@ class GraphInterface:
         self.graph_index = graph_index
 
     def check_neighbours(self, node, neighbor_type=None):
-        if neighbor_type:
-            return str(self.graph_index[node]['neighbors'][neighbor_type])
-        else:
-            return str(self.graph_index[node]['neighbors'])
+        print(f"DEBUG [check-neighbours]: Node={node}, neighbor_type={neighbor_type}")
+        try: 
+            if neighbor_type:
+                return str(self.graph_index[node]['neighbors'][neighbor_type])
+            else:
+                return str(self.graph_index[node]['neighbors'])
+        except Exception as e:
+            print(f"ERROR: {e}")
+            return None 
 
     def check_nodes(self, node, feature=None):
         """check the attributes of the nodes"""
-        if feature:
-            return str(self.graph_index[node]['features'][feature])
-        else:
-            return str(self.graph_index[node]['features'])
+        print(f"DEBUG: [GI.check_nodes]: node = {node}")
+        print(f"DEBUG: [GI.check_nodes]: feature = {feature}")
+
+        #node_features  = self.graph_index[node]
+        #for k,v in node_features.items(): 
+        #    print(f"DEBUG: [GI.check_nodes]: {k} --> {v}")
+        try: 
+            if feature:
+                return str(self.graph_index[node]['features'][feature])
+            else:
+                return str(self.graph_index[node]['features'])
+        except Exception as e:
+            print(f"ERROR: {e}")
+            return None 
 
     def check_degree(self, node, neighbor_type):
         return str(len(self.graph_index[node]['neighbors'][neighbor_type]))
+
+    def check_intersection(self, list1, list2): 
+        print(f"DEBUG: [GI.cehck_intersection]: list1 = {list1}")
+        print(f"DEBUG: [GI.cehck_intersection]: list2 = {list2}")
+        return list(set(list1) & set(list2))
 # ============================================================================:
 class GraphAgent: 
     def __init__(self, 
@@ -343,7 +478,7 @@ class GraphAgent:
                 embedder_model = None, 
                 steps = 10,
                 **kwargs):
-
+        self.logger = logging.getLogger(f"{__name__}.GraphAgent")    
         self.graph_path = graph_path
         self.embedder_model = embedder_model
         self.domain = domain 
@@ -408,7 +543,11 @@ class GraphAgent:
         
         print("\nDumping Response line-by-line: ")
         print(  "------------------------------")
+        break_case = False 
         for rl in rlines: 
+            if break_case:  
+                break 
+
             rl = rl.strip()
             if (not rl) or (rl == ""): continue 
             if self.is_finished(): continue
@@ -416,6 +555,7 @@ class GraphAgent:
 
             keep_lines.append(rl) # ------ NOTE - We start w. KEEPING LINE 
             if rl.startswith("Action"): 
+                if break_case: break 
                 m = RE_ACTION.search(rl)
                 if m: 
                     num = m.group("num")
@@ -424,11 +564,29 @@ class GraphAgent:
                 else: 
                     raise RuntimeError("Bad Action parsing: {rl}")
                 observation = f"Observation {num}: "
-                action_list = get_action_list(action)
+
+
+                if "IntersectionCheck" in action: 
+                    action_list = [action] 
+                else: 
+                    action_list = get_action_list(action)
                 node_feature_count = 0
                 for cnt, tmp_action in enumerate(action_list, start=0):
                     try:                                                         
-                        action_type, argument = parse_action(tmp_action) 
+                        if tmp_action.startswith('IntersectionCheck'): 
+                            list1, list2 = parse_intersection_check(rl) # TODO
+                            action_type = "IntersectionCheck"
+                            argument = [list1, list2]
+                            if (list1 == None) or (list2 == None): 
+                                self.logger.error(f"Runtime Error on parse_intersection_check. ONe of the lists are None ") 
+                                break_case = True 
+                                break
+                        else:
+                            action_type, argument = parse_action(tmp_action) 
+                            if action_type not in ["IntersectionCheck", "RetrieveNode", "NodeDegreee", "NeighbourCheck", "NodeFeature", "Finish"]: 
+                                self.logger.error(f"Unsuppored Action: {action_type}") 
+                                break_case = True 
+                                break 
                     except:                                                      
                         err_cnt += 1                                             
                         err_msg= 'There is something wrong with the generated target actions.'
@@ -440,6 +598,9 @@ class GraphAgent:
                     if action_type == 'RetrieveNode': # ************************* RETRIEVENODE
                         try:                                                     
                             idd, node = self.retriever.search_single(argument, 1)
+                            print(f"idd = {idd}, type={type(idd)}")
+                            print(f"node = {node}, type={type(node)}")
+                            proceed()
                             observation += f"The ID of this retrieval target node is {idd}."
                         except: 
                             raise RuntimeError(f"Bad RetrieveNode call ")
@@ -449,8 +610,13 @@ class GraphAgent:
                         node_id = remove_quotes(node_id)                         
                         neighbor_type = remove_quotes(neighbor_type)             
                         x = (self.graph.check_neighbours(node_id,neighbor_type))
+                        if x == None: 
+                            self.logger.error(f"Runtime Error on CheckNeighbours - check logs ") 
+                            break_case = True 
+                            break
+                       
                         observation += x
-
+                        
                     elif action_type == 'NodeFeature': # ************************ NODEFEATURE
                         node_id, feature_name = argument.split(', ')                   
                         node_id = remove_quotes(node_id)                               
@@ -460,17 +626,48 @@ class GraphAgent:
                         print(f"DEBUG: [{func}]: --> len(action_list) = {len(action_list)}")
   
                         if feature_name.startswith("participates") and self.domain == "biomedical": 
-                            feature_name = "Gene-{feature_name}"
+                            feature_name = f"Gene-{feature_name}"
                             print(f"DEBUG: [{func}]: Updated: NodeFeature: feature-name={feature_name}")
 
 
                         entry = self.graph.check_nodes(node_id, feature_name)
+                        if entry == None:
+                            self.logger.error(f"Runtime Error on CheckNodes - check logs ") 
+                            break_case = True 
+                            break
                         print(f"DEBUG: [{func}]: Entry = {entry}, node-feature-count = {node_feature_count}")
                         if node_feature_count == 0 :                             
                             observation += entry
                         else:
                             observation += ", " + entry
                         node_feature_count += 1                              
+  
+                    elif action_type == "NodeDegree": # ************************* NODEDEGREEE
+                        node_id, neighbor_type = argument.split(', ')               
+                        node_id = remove_quotes(node_id)                            
+                        neighbor_type = remove_quotes(neighbor_type)                
+                        try:
+                            value = self.graph.check_degree(node_id, neighbor_type)
+                        except KeyError:
+                            self.logger.error(f"Runtime Key Error on NodeDegree: node-id={node_id}, neighbor_type={neighbor_type}") 
+                            break_case = True 
+                            break
+                        
+                        observation +=  f"The {neighbor_type} neighbor node degree of {node_id} is: {value}."
+
+
+                    elif action_type == "IntersectionCheck": # ****************** INTERSECTIONCHECK
+                        print(f"Made Intersection check: argument={argument}")
+                        try: 
+                            intersection = self.graph.check_intersection(*argument)
+                        except: 
+                            self.logger.error(f"Runtime on IntersectionCheck") 
+                            break_case = True 
+                            break
+                        print(f"Returned intersection = {intersection}")
+                        observation += "[%s]"%(', '.join(intersection))
+                      
+                        
 
                     elif action_type == 'Finish':# ******************************* FINISH 
                         try:                                                     
@@ -508,7 +705,7 @@ class GraphAgent:
                 #       delete before leaving.
         self.scratchpad.extend(keep_lines)
 
-        return response, "\n".join(keep_lines)
+        return response, "\n".join(keep_lines), break_case
 
     def check_strings_llm(self, string1, string2): 
         sys_prompt = dedent("""                                                            
@@ -580,7 +777,7 @@ if __name__ == "__main__":
         "examples" : EXAMPLES[_domain], 
         "prefix_prompt": PREFIX_PROMPT, 
         "graph_definition": GRAPH_DEF[_domain], 
-        "gen_params" : {"temperature":0.2, "max_new_tokens":256, "stop":["Observation"],}, 
+        "gen_params" : {"temperature":0.2, "max_new_tokens":320, "stop":["Observation"],}, 
         "graph_path" : graph_paths[domain], 
         "embedder_model" : embedder,  
     }
@@ -590,22 +787,27 @@ if __name__ == "__main__":
     ques_answered = 0 
     print(f"DEBUG: start-idx={start_idx}")
     print(f"DEBUG: do_qid={do_qid}")
+
+    Results = collections.OrderedDict()
     for i, qdata in enumerate(qa_data):                                         
         # If users provided QID, then only do that one
         if do_qid and (do_qid != i): continue 
 
-        print("X")
         # If start-idx less than i, skip 
         if i < start_idx : continue 
-        print("Y")
         
+
         qid      = qdata['qid']
         answer   = qdata['answer']                                              
         question = qdata['question']                                            
 
         panel_print(tag=f"Domain-{domain}: Question ({qid}):",content=question)
         panel_print(tag=f"Domain-{domain}:   Answer ({qid}):",content=answer)
-        proceed() 
+        #proceed() 
+        _skip = input("\nSkip?")
+        if _skip in ["y", "Y"]: 
+            continue 
+
 
         if ques_answered >= 1: 
             print(f"\nClearing memory. Setting 5 seconds timeout...")
@@ -614,13 +816,30 @@ if __name__ == "__main__":
             time.sleep(5)
   
      
+        rlog = [] 
         ga.reset()                   # TODO: why here? This should be better integrated
         for step in range(ga.steps): # TODO: This should probably be consumed by evaulate...
-            raw_resp, filtered_resp = ga.evaluate(question, ground_truth=answer)
+            raw_resp, filtered_resp, break_case = ga.evaluate(question, ground_truth=answer)
             panel_print(tag=f"GraphAgent -- Raw Response -- {step}", content=raw_resp)
             panel_print(tag=f"GraphAgent -- Filtered Response -- {step}", content=filtered_resp)
+            if break_case:  
+                print("Break case found!")
+
+                rlog.append(f"Domain={domain}")
+                rlog.append(f"QID={qid}")
+                rlog.append(f"Question: {question}")
+                rlog.append("\nthought - trace")
+                rlog.append(  "---------------")
+                rlog.append(("\n".join(ga.scratchpad)))
+                rlog.append(f"\nGround Truth: {answer}")
+                rlog.append(f"\nBreak Case")
+                with open(f"flogs/{domain}_qid_{qid}__breakcase__{get_datetime_str()}.log", 'w') as writer: 
+                    writer.write("\n".join(rlog))
+                break 
+
             if ga.is_finished(): break 
-            proceed()
+            #proceed()
+
 
         if ga.is_finished(): 
             panel_print(tag="Final Scratchpad", content="\n".join(ga.scratchpad))
@@ -631,14 +850,45 @@ if __name__ == "__main__":
             print(  "---------------")
             print("\n".join(ga.scratchpad))
             print(f"\nGround Truth: {answer}")
-            # TODO: Store results 
+            rlog.append(f"Domain={domain}")
+            rlog.append(f"QID={qid}")
+            rlog.append(f"Question: {question}")
+            rlog.append("\nthought - trace")
+            rlog.append(  "---------------")
+            rlog.append(("\n".join(ga.scratchpad)))
+            rlog.append(f"\nGround Truth: {answer}")
+            Results[qid] = {
+                'trace':"\n".join(ga.scratchpad), 
+                'ground_truth': answer,
+                'correct': ga._correct,
+            }
+
         elif (step == ga.steps - 1): # read out on the last step
             print(f"Question: {question}")
             print("\nthought - trace")
             print(  "---------------")
             print("\n".join(ga.scratchpad))
             print(f"\nGround Truth: {answer}")
+            rlog.append(f"Domain={domain}")
+            rlog.append(f"QID={qid}")
+            rlog.append(f"Question: {question}")
+            rlog.append("\nthought - trace")
+            rlog.append(  "---------------")
+            rlog.append(("\n".join(ga.scratchpad)))
+            rlog.append(f"\nGround Truth: {answer}")
+            Results[qid] = {
+                'trace':"\n".join(ga.scratchpad), 
+                'ground_truth': answer,
+                'correct': 0,
+            }
+
+        if rlog.__len__() > 0: 
+            with open(f"flogs/{domain}_qid_{qid}__{get_datetime_str()}.log", 'w') as writer: 
+                writer.write("\n".join(rlog))
+
+        #print(Results)
            
+        panel_print(tag=f"QID={qid}", content=question, border_style="yellow")
         ques_answered += 1
         proceed()
    
